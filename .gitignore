@@ -1,0 +1,102 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.virtualenv/
+
+# Test, coverage and notebook artifacts
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# Python tool caches
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+
+# Build and packaging artifacts
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# IDE/editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+*.bak
+*.orig
+
+# OS files
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+
+# Local environment files
+.env
+.env.*
+*.local
+
+# Local data and generated outputs
+data/*
+!data/
+!data/**/
+!data/**/*.csv
+!data/.gitkeep
+*.tsv
+*.xlsx
+*.xls
+
+# Trained models and machine-learning artifacts
+Models/*
+models/*
+!Models/.gitkeep
+!models/.gitkeep
+*.pkl
+*.pickle
+*.joblib
+*.h5
+*.hdf5
+*.keras
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.pb
+*.tflite
+
+# Runtime output folders
+outputs/
+output/
+results/
+reports/
+plots/
+figures/

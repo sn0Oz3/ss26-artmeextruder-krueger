@@ -7,6 +7,8 @@ from sklearn.preprocessing import StandardScaler
 
 
 def _import_keras():
+    # Keras wird erst bei Bedarf importiert, damit das Modul auch ohne
+    # installierte ML-Abhaengigkeiten geladen werden kann.
     try:
         from keras import Sequential
         from keras.layers import Dense, Dropout, Input
@@ -23,6 +25,8 @@ def _import_keras():
 
 def _build_optimizer(name, learning_rate):
     _, _, _, _, Adam, RMSprop, SGD, _ = _import_keras()
+    # Die Namen aus den Hyperparametern werden hier auf konkrete Keras-
+    # Optimizer-Klassen abgebildet.
     optimizers = {
         "adam": Adam,
         "rmsprop": RMSprop,
@@ -46,11 +50,14 @@ def build_mlp_model(
 ):
     Sequential, Dense, Dropout, Input, _, _, _, _ = _import_keras()
 
+    # Standardwerte: zwei versteckte Layer und MAE als zusaetzliche Metrik.
     if metrics is None:
         metrics = ["mae"]
     if hidden_units is None:
         hidden_units = [hidden_layer_1_units, hidden_layer_2_units]
 
+    # Das MLP besteht aus einem Eingabelayer, variabel vielen Dense-Layern
+    # mit optionalem Dropout und einem linearen Ausgabeneuron fuer Regression.
     layers = [Input(shape=(input_dim,))]
     for units in hidden_units:
         layers.append(Dense(units, activation=hidden_activation))
@@ -69,6 +76,8 @@ def build_mlp_model(
 
 
 def _suggest_hyperparameters(trial):
+    # Optuna waehlt pro Trial Architektur und Trainingsparameter aus diesem
+    # Suchraum aus.
     layer_count = trial.suggest_int("hidden_layer_count", 1, 4)
     hidden_units = [
         trial.suggest_categorical(f"hidden_layer_{i + 1}_units", [8, 16, 32, 64, 128])
@@ -95,6 +104,9 @@ def _create_early_stopping(
     restore_best_weights=True,
 ):
     *_, EarlyStopping = _import_keras()
+    # Early Stopping beendet ein Training, wenn sich der Validierungsfehler
+    # nicht mehr ausreichend verbessert, und stellt optional die besten
+    # Gewichte wieder her.
     return EarlyStopping(
         monitor=monitor,
         mode=mode,
@@ -131,11 +143,15 @@ def _optimize_hyperparameters(
         tf = None
 
     def objective(trial):
+        # Vor jedem Trial wird die TensorFlow-Session geleert, damit alte
+        # Modellgraphen keinen Speicher belegen und der Seed reproduzierbar ist.
         if tf is not None:
             tf.keras.backend.clear_session()
             tf.keras.utils.set_random_seed(random_state)
 
         params = _suggest_hyperparameters(trial)
+        # Jeder Trial trainiert ein neues Modell mit den von Optuna
+        # vorgeschlagenen Hyperparametern.
         model = build_mlp_model(
             input_dim=input_dim,
             hidden_units=params["hidden_units"],
@@ -157,8 +173,11 @@ def _optimize_hyperparameters(
             verbose=0,
         )
 
+        # Optuna minimiert den besten Validierungs-Loss des jeweiligen Trials.
         return min(history.history["val_loss"])
 
+    # Der TPE-Sampler nutzt die bisherigen Ergebnisse, um nach und nach
+    # vielversprechendere Hyperparameter-Kombinationen vorzuschlagen.
     sampler = optuna.samplers.TPESampler(seed=random_state)
     study = optuna.create_study(direction="minimize", sampler=sampler)
     study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
@@ -168,6 +187,8 @@ def _optimize_hyperparameters(
 
 
 def _suggestion_dict_to_model_params(params):
+    # Optuna speichert Layer einzeln im Trial-Dictionary; fuer den Modellbau
+    # werden sie wieder zu einer Liste zusammengefuehrt.
     layer_count = params["hidden_layer_count"]
     return {
         "hidden_units": [
@@ -184,9 +205,12 @@ def _suggestion_dict_to_model_params(params):
 def train_model(data, n_trials=30):
     csv_path = Path(data)
 
+    # Eingabegroessen fuer das Modell und Zielwert, der vorhergesagt werden soll.
     feature_columns = ["Temp Act (C)", "Extruder RPM", "Puller RPM", "Sensor Pos"]
     target_column = "Diameter (mm)"
 
+    # Zentrale Trainingskonfiguration. Die eigentliche Architektur wird spaeter
+    # durch Optuna bestimmt.
     output_activation = "linear"
     loss = "mse"
     metrics = ["mae"]
@@ -203,15 +227,20 @@ def train_model(data, n_trials=30):
         "restore_best_weights": True,
     }
 
+    # CSV laden und die benoetigten Spalten in NumPy-Arrays fuer Keras wandeln.
     csv_df = pd.read_csv(csv_path)
     feature_array = csv_df[feature_columns].to_numpy()
     diameter_array = csv_df[[target_column]].to_numpy()
 
+    # Features und Zielwert werden standardisiert, damit das neuronale Netz auf
+    # vergleichbaren Skalen trainiert.
     scaler_feature = StandardScaler()
     scaler_diameter = StandardScaler()
     feature_array_scaled = scaler_feature.fit_transform(feature_array)
     diameter_array_scaled = scaler_diameter.fit_transform(diameter_array)
 
+    # Zuerst wird ein Testdatensatz abgetrennt. Aus dem verbleibenden Anteil
+    # entsteht anschliessend ein Validierungsdatensatz fuer Optuna und Training.
     X_train_val, X_test, y_train_val, y_test = train_test_split(
         feature_array_scaled,
         diameter_array_scaled,
@@ -227,6 +256,8 @@ def train_model(data, n_trials=30):
         shuffle=shuffle,
     )
 
+    # Die Hyperparameter-Suche trainiert mehrere kleine Kandidatenmodelle und
+    # liefert die beste gefundene Konfiguration zurueck.
     print("Optuna-Hyperparameter-Suche gestartet...")
     study, best_params = _optimize_hyperparameters(
         X_train=X_train,
@@ -242,6 +273,8 @@ def train_model(data, n_trials=30):
         random_state=random_state,
     )
 
+    # Mit den besten Hyperparametern wird das finale Modell noch einmal sauber
+    # auf dem Trainingssplit trainiert.
     print("Training des besten Models gestartet...")
     mlp_model = build_mlp_model(
         input_dim=X_train.shape[1],
@@ -264,8 +297,12 @@ def train_model(data, n_trials=30):
         verbose=0,
     )
 
+    # Die finale Bewertung erfolgt nur auf dem Testsplit, der bei Suche und
+    # Training nicht verwendet wurde.
     test_loss, test_mae = mlp_model.evaluate(X_test, y_test, verbose=0)
 
+    # Alle Ergebnisse werden im Projektordner Models abgelegt, damit Prediction
+    # und Auswertung spaeter dieselben Artefakte verwenden koennen.
     models_dir = Path(__file__).resolve().parent.parent / "Models"
     models_dir.mkdir(exist_ok=True)
 
@@ -293,6 +330,8 @@ def train_model(data, n_trials=30):
     with optuna_study_path.open("wb") as study_file:
         pickle.dump(study, study_file)
 
+    # Textdatei mit den wichtigsten Einstellungen und Kennzahlen fuer eine
+    # schnelle Nachvollziehbarkeit ausserhalb von Python.
     hyperparameter_text = (
         "Hyperparameter des MLP-Modells\n"
         "==============================\n\n"
@@ -341,6 +380,8 @@ def train_model(data, n_trials=30):
     )
     hyperparameter_path.write_text(hyperparameter_text, encoding="utf-8")
 
+    # Die Rueckgabe enthaelt sowohl eine kompakte Zusammenfassung als auch die
+    # Pfade zu allen erzeugten Artefakten.
     message = (
         f"Model trained on {len(csv_df)} rows "
         f"with feature array shape {feature_array_scaled.shape}"

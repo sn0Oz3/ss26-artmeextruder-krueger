@@ -6,42 +6,61 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 
+def _import_keras():
+    try:
+        from keras import Sequential
+        from keras.layers import Dense, Dropout, Input
+        from keras.optimizers import Adam, RMSprop, SGD
+        from keras.callbacks import EarlyStopping
+    except ImportError as exc:
+        raise ImportError(
+            "TensorFlow/Keras wird fuer das Multi-Layer-Perceptron benoetigt. "
+            "Installiere es z.B. mit: pip install tensorflow keras"
+        ) from exc
+
+    return Sequential, Dense, Dropout, Input, Adam, RMSprop, SGD, EarlyStopping
+
+
+def _build_optimizer(name, learning_rate):
+    _, _, _, _, Adam, RMSprop, SGD, _ = _import_keras()
+    optimizers = {
+        "adam": Adam,
+        "rmsprop": RMSprop,
+        "sgd": SGD,
+    }
+    return optimizers[name](learning_rate=learning_rate)
+
+
 def build_mlp_model(
     input_dim=4,
+    hidden_units=None,
     hidden_layer_1_units=32,
     hidden_layer_2_units=16,
     dropout_rate=0.1,
     hidden_activation="relu",
     output_activation="linear",
     optimizer="adam",
+    learning_rate=0.001,
     loss="mse",
     metrics=None,
 ):
-    try:
-        from keras import Sequential
-        from keras.layers import Dense, Dropout, Input
-    except ImportError as exc:
-        raise ImportError(
-            "TensorFlow/Keras wird fuer das Multi-Layer-Perceptron benoetigt. "
-            "Installiere es z.B. mit: pip install tensorflow"
-        ) from exc
+    Sequential, Dense, Dropout, Input, _, _, _, _ = _import_keras()
 
     if metrics is None:
         metrics = ["mae"]
+    if hidden_units is None:
+        hidden_units = [hidden_layer_1_units, hidden_layer_2_units]
 
-    # Ein einfaches Multi-Layer-Perceptron mit zwei versteckten Schichten und Dropout zur Regularisierung. ----> Dropout-Rate von 0.1 bedeutet, dass 10% der Neuronen in den versteckten Schichten zufaellig deaktiviert werden, um Overfitting zu reduzieren.
-    model = Sequential(
-        [
-            Input(shape=(input_dim,)),
-            Dense(hidden_layer_1_units, activation=hidden_activation),
-            Dropout(dropout_rate),
-            Dense(hidden_layer_2_units, activation=hidden_activation),
-            Dense(1, activation=output_activation),
-        ]
-    )
+    layers = [Input(shape=(input_dim,))]
+    for units in hidden_units:
+        layers.append(Dense(units, activation=hidden_activation))
+        if dropout_rate > 0:
+            layers.append(Dropout(dropout_rate))
+    layers.append(Dense(1, activation=output_activation))
 
+    model = Sequential(layers)
     model.compile(
-        optimizer=optimizer,  # Lernrate = 0.001 by default (Adams)
+        optimizer=_build_optimizer(optimizer, learning_rate),
         loss=loss,
         metrics=metrics,
     )
@@ -49,100 +68,202 @@ def build_mlp_model(
     return model
 
 
-def train_model(data):
+def _suggest_hyperparameters(trial):
+    layer_count = trial.suggest_int("hidden_layer_count", 1, 4)
+    hidden_units = [
+        trial.suggest_categorical(f"hidden_layer_{i + 1}_units", [8, 16, 32, 64, 128])
+        for i in range(layer_count)
+    ]
+
+    return {
+        "hidden_units": hidden_units,
+        "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.4, step=0.05),
+        "hidden_activation": trial.suggest_categorical(
+            "hidden_activation", ["relu", "tanh", "elu"]
+        ),
+        "optimizer": trial.suggest_categorical("optimizer", ["adam", "rmsprop", "sgd"]),
+        "learning_rate": trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True),
+        "batch_size": trial.suggest_categorical("batch_size", [8, 16, 32, 64]),
+    }
+
+
+def _create_early_stopping(
+    monitor="val_loss",
+    mode="min",
+    patience=10,
+    min_delta=0.0001,
+    restore_best_weights=True,
+):
+    *_, EarlyStopping = _import_keras()
+    return EarlyStopping(
+        monitor=monitor,
+        mode=mode,
+        patience=patience,
+        min_delta=min_delta,
+        restore_best_weights=restore_best_weights,
+    )
+
+
+def _optimize_hyperparameters(
+    X_train,
+    y_train,
+    X_val,
+    y_val,
+    input_dim,
+    loss,
+    metrics,
+    epochs,
+    early_stopping_settings,
+    n_trials,
+    random_state,
+):
+    try:
+        import optuna
+    except ImportError as exc:
+        raise ImportError(
+            "Optuna wird fuer die automatische Hyperparameter-Suche benoetigt. "
+            "Installiere es z.B. mit: pip install optuna"
+        ) from exc
+
+    try:
+        import tensorflow as tf
+    except ImportError:
+        tf = None
+
+    def objective(trial):
+        if tf is not None:
+            tf.keras.backend.clear_session()
+            tf.keras.utils.set_random_seed(random_state)
+
+        params = _suggest_hyperparameters(trial)
+        model = build_mlp_model(
+            input_dim=input_dim,
+            hidden_units=params["hidden_units"],
+            dropout_rate=params["dropout_rate"],
+            hidden_activation=params["hidden_activation"],
+            optimizer=params["optimizer"],
+            learning_rate=params["learning_rate"],
+            loss=loss,
+            metrics=metrics,
+        )
+
+        history = model.fit(
+            X_train,
+            y_train,
+            epochs=epochs,
+            batch_size=params["batch_size"],
+            validation_data=(X_val, y_val),
+            callbacks=[_create_early_stopping(**early_stopping_settings)],
+            verbose=0,
+        )
+
+        return min(history.history["val_loss"])
+
+    sampler = optuna.samplers.TPESampler(seed=random_state)
+    study = optuna.create_study(direction="minimize", sampler=sampler)
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+    best_params = _suggestion_dict_to_model_params(study.best_trial.params)
+
+    return study, best_params
+
+
+def _suggestion_dict_to_model_params(params):
+    layer_count = params["hidden_layer_count"]
+    return {
+        "hidden_units": [
+            params[f"hidden_layer_{i + 1}_units"] for i in range(layer_count)
+        ],
+        "dropout_rate": params["dropout_rate"],
+        "hidden_activation": params["hidden_activation"],
+        "optimizer": params["optimizer"],
+        "learning_rate": params["learning_rate"],
+        "batch_size": params["batch_size"],
+    }
+
+
+def train_model(data, n_trials=30):
     csv_path = Path(data)
 
-    feature_columns = ['Temp Act (C)', 'Extruder RPM', 'Puller RPM', 'Sensor Pos']
-    target_column = 'Diameter (mm)'
+    feature_columns = ["Temp Act (C)", "Extruder RPM", "Puller RPM", "Sensor Pos"]
+    target_column = "Diameter (mm)"
 
-    # Parameter Multi-Layer-Perceptron
-    hidden_layer_1_units = 32
-    hidden_layer_2_units = 16
-    dropout_rate = 0.1
-    hidden_activation = "relu"
     output_activation = "linear"
-    optimizer = "adam"
     loss = "mse"
     metrics = ["mae"]
     test_size = 0.2
+    validation_size = 0.2
     random_state = 42
     shuffle = True
     epochs = 100
-    batch_size = 32
-    early_stopping_monitor = "val_loss"
-    early_stopping_mode = "min"
-    early_stopping_patience = 10
-    early_stopping_min_delta = 0.0001
-    early_stopping_restore_best_weights = True
+    early_stopping_settings = {
+        "monitor": "val_loss",
+        "mode": "min",
+        "patience": 10,
+        "min_delta": 0.0001,
+        "restore_best_weights": True,
+    }
 
-    # Read the CSV passed from main.py directly.
     csv_df = pd.read_csv(csv_path)
-
-    # Extract the measurement columns and map them into a NumPy array as requested:
     feature_array = csv_df[feature_columns].to_numpy()
-
-    # Store all values from the Diameter (mm) column in a second NumPy array.
     diameter_array = csv_df[[target_column]].to_numpy()
 
-    # Scaler -> StandardScaler, da Temp gaaaanz groß und Durchmesser gaaaanz klein
     scaler_feature = StandardScaler()
     scaler_diameter = StandardScaler()
     feature_array_scaled = scaler_feature.fit_transform(feature_array)
     diameter_array_scaled = scaler_diameter.fit_transform(diameter_array)
 
-    # Train/Test Split fuer das spaetere Training eines Multi-Layer-Perceptrons.
-    X_train, X_test, y_train, y_test = train_test_split(
+    X_train_val, X_test, y_train_val, y_test = train_test_split(
         feature_array_scaled,
         diameter_array_scaled,
         test_size=test_size,
         random_state=random_state,
         shuffle=shuffle,
     )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train_val,
+        y_train_val,
+        test_size=validation_size,
+        random_state=random_state,
+        shuffle=shuffle,
+    )
 
-    #MLP wird gebaut
+    print("Optuna-Hyperparameter-Suche gestartet...")
+    study, best_params = _optimize_hyperparameters(
+        X_train=X_train,
+        y_train=y_train,
+        X_val=X_val,
+        y_val=y_val,
+        input_dim=X_train.shape[1],
+        loss=loss,
+        metrics=metrics,
+        epochs=epochs,
+        early_stopping_settings=early_stopping_settings,
+        n_trials=n_trials,
+        random_state=random_state,
+    )
+
+    print("Training des besten Models gestartet...")
     mlp_model = build_mlp_model(
         input_dim=X_train.shape[1],
-        hidden_layer_1_units=hidden_layer_1_units,
-        hidden_layer_2_units=hidden_layer_2_units,
-        dropout_rate=dropout_rate,
-        hidden_activation=hidden_activation,
+        hidden_units=best_params["hidden_units"],
+        dropout_rate=best_params["dropout_rate"],
+        hidden_activation=best_params["hidden_activation"],
         output_activation=output_activation,
-        optimizer=optimizer,
+        optimizer=best_params["optimizer"],
+        learning_rate=best_params["learning_rate"],
         loss=loss,
         metrics=metrics,
     )
-    try:
-        from keras.callbacks import EarlyStopping
-    except ImportError as exc:
-        raise ImportError(
-            "TensorFlow/Keras wird fuer das Multi-Layer-Perceptron benoetigt. "
-            "Installiere es z.B. mit: pip install tensorflow"
-        ) from exc
-
-    #Early-Stopping-Callback, um das Training zu beenden, wenn die Validierungsleistung nicht mehr verbessert wird. ->Auswendig lernen vermeiden, überparametrisierung
-    early_stopping = EarlyStopping(
-        monitor=early_stopping_monitor,
-        mode=early_stopping_mode,
-        patience=early_stopping_patience,
-        min_delta=early_stopping_min_delta,
-        restore_best_weights=early_stopping_restore_best_weights,
-    )
-
-    #UX-Improvement
-    print("Training des Models gestartet...")
-
-    #model.fit
     history = mlp_model.fit(
         X_train,
         y_train,
         epochs=epochs,
-        batch_size=batch_size,
-        validation_data=(X_test, y_test),
-        callbacks=[early_stopping],
+        batch_size=best_params["batch_size"],
+        validation_data=(X_val, y_val),
+        callbacks=[_create_early_stopping(**early_stopping_settings)],
         verbose=0,
     )
 
-    #Speichern der Trainingshistorie, um sie spaeter in der Evaluation anzuzeigen.
     test_loss, test_mae = mlp_model.evaluate(X_test, y_test, verbose=0)
 
     models_dir = Path(__file__).resolve().parent.parent / "Models"
@@ -152,6 +273,7 @@ def train_model(data):
     scaler_path = models_dir / "scalers.pkl"
     history_path = models_dir / "training_history.pkl"
     hyperparameter_path = models_dir / "hyperparameters.txt"
+    optuna_study_path = models_dir / "optuna_study.pkl"
 
     with model_path.open("wb") as model_file:
         pickle.dump(mlp_model, model_file)
@@ -168,39 +290,49 @@ def train_model(data):
     with history_path.open("wb") as history_file:
         pickle.dump(history.history, history_file)
 
-    # Ausgabe der Hyperparameter und finalen Ergebnisse in einer Textdatei fuer die Dokumentation.
+    with optuna_study_path.open("wb") as study_file:
+        pickle.dump(study, study_file)
+
     hyperparameter_text = (
         "Hyperparameter des MLP-Modells\n"
         "==============================\n\n"
         f"Datenquelle: {csv_path}\n"
         f"Feature-Spalten: {', '.join(feature_columns)}\n"
         f"Ziel-Spalte: {target_column}\n\n"
+        "Optuna\n"
+        "------\n"
+        f"Trials: {n_trials}\n"
+        f"Best Trial: {study.best_trial.number}\n"
+        f"Best Validation Loss: {study.best_value:.4f}\n"
+        f"Study gespeichert unter: {optuna_study_path}\n\n"
         "Modellarchitektur\n"
         "-----------------\n"
         f"Input Dimension: {X_train.shape[1]}\n"
-        f"Hidden Layer 1 Neuronen: {hidden_layer_1_units}\n"
-        f"Hidden Layer 2 Neuronen: {hidden_layer_2_units}\n"
-        f"Hidden Activation: {hidden_activation}\n"
+        f"Hidden Layer Anzahl: {len(best_params['hidden_units'])}\n"
+        f"Hidden Layer Neuronen: {best_params['hidden_units']}\n"
+        f"Hidden Activation: {best_params['hidden_activation']}\n"
         f"Output Activation: {output_activation}\n"
-        f"Dropout Rate: {dropout_rate}\n\n"
+        f"Dropout Rate: {best_params['dropout_rate']}\n\n"
         "Training\n"
         "--------\n"
-        f"Optimizer: {optimizer}\n"
+        f"Optimizer: {best_params['optimizer']}\n"
+        f"Learning Rate: {best_params['learning_rate']:.6f}\n"
         f"Loss: {loss}\n"
         f"Metrics: {', '.join(metrics)}\n"
-        f"Epochs: {epochs}\n"
-        f"Tatsaechlich trainierte Epochen: {len(history.history['loss'])}\n"
-        f"Batch Size: {batch_size}\n"
+        f"Max Epochs pro Trial/finalem Training: {epochs}\n"
+        f"Tatsaechlich trainierte Epochen final: {len(history.history['loss'])}\n"
+        f"Batch Size: {best_params['batch_size']}\n"
         f"Test Size: {test_size}\n"
+        f"Validation Size vom Trainingsanteil: {validation_size}\n"
         f"Random State: {random_state}\n"
         f"Shuffle: {shuffle}\n\n"
         "Early Stopping\n"
         "--------------\n"
-        f"Monitor: {early_stopping_monitor}\n"
-        f"Mode: {early_stopping_mode}\n"
-        f"Patience: {early_stopping_patience}\n"
-        f"Min Delta: {early_stopping_min_delta}\n"
-        f"Restore Best Weights: {early_stopping_restore_best_weights}\n\n"
+        f"Monitor: {early_stopping_settings['monitor']}\n"
+        f"Mode: {early_stopping_settings['mode']}\n"
+        f"Patience: {early_stopping_settings['patience']}\n"
+        f"Min Delta: {early_stopping_settings['min_delta']}\n"
+        f"Restore Best Weights: {early_stopping_settings['restore_best_weights']}\n\n"
         "Finale Ergebnisse\n"
         "-----------------\n"
         f"Final Validation Loss: {history.history['val_loss'][-1]:.4f}\n"
@@ -209,14 +341,16 @@ def train_model(data):
     )
     hyperparameter_path.write_text(hyperparameter_text, encoding="utf-8")
 
-    # Ausgabe im Terminal
     message = (
-        # print(feature_array_scaled),
         f"Model trained on {len(csv_df)} rows "
         f"with feature array shape {feature_array_scaled.shape}"
-        f"and diameter array shape {diameter_array_scaled.shape}"
+        f" and diameter array shape {diameter_array_scaled.shape}"
         f", train shape {X_train.shape}/{y_train.shape}"
+        f", validation shape {X_val.shape}/{y_val.shape}"
         f", test shape {X_test.shape}/{y_test.shape}"
+        f", optuna trials {n_trials}"
+        f", best trial {study.best_trial.number}"
+        f", best optuna validation loss {study.best_value:.4f}"
         f", trained epochs {len(history.history['loss'])}"
         f", final validation loss {history.history['val_loss'][-1]:.4f}"
         f", test MSE {test_loss:.4f}"
@@ -225,6 +359,7 @@ def train_model(data):
         f", scalers saved to {scaler_path}"
         f", training history saved to {history_path}"
         f", hyperparameters saved to {hyperparameter_path}"
+        f", optuna study saved to {optuna_study_path}"
     )
 
     return {
@@ -233,5 +368,6 @@ def train_model(data):
         "scaler_path": scaler_path,
         "history_path": history_path,
         "hyperparameter_path": hyperparameter_path,
+        "optuna_study_path": optuna_study_path,
         "data_path": csv_path,
     }

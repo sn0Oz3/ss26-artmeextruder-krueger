@@ -1,29 +1,37 @@
-==============================
 Hyperparameter des MLP-Modells
 ==============================
 
-Datenquelle: C:\Users\simon\Desktop\KIDM\data\recording_2026-06-11_13-53-40_preprocessed.csv
+Datenquelle: C:\Users\simon\Desktop\Hochschule\KIDM\Git\ss26-artmeextruder-krueger\data\recording_2026-06-10_13-53-40_preprocessed.csv
 Feature-Spalten: Temp Act (C), Extruder RPM, Puller RPM, Sensor Pos
 Ziel-Spalte: Diameter (mm)
+
+Optuna
+------
+Trials: 30
+Best Trial: 25
+Best Validation Loss: 0.0563
+Study gespeichert unter: C:\Users\simon\Desktop\Hochschule\KIDM\Git\ss26-artmeextruder-krueger\Models\optuna_study.pkl
 
 Modellarchitektur
 -----------------
 Input Dimension: 4
-Hidden Layer 1 Neuronen: 32
-Hidden Layer 2 Neuronen: 16
-Hidden Activation: relu
+Hidden Layer Anzahl: 3
+Hidden Layer Neuronen: [32, 16, 16]
+Hidden Activation: tanh
 Output Activation: linear
-Dropout Rate: 0.1
+Dropout Rate: 0.0
 
 Training
 --------
 Optimizer: adam
+Learning Rate: 0.002781
 Loss: mse
 Metrics: mae
-Epochs: 100
-Tatsaechlich trainierte Epochen: 100
-Batch Size: 32
+Max Epochs pro Trial/finalem Training: 100
+Tatsaechlich trainierte Epochen final: 100
+Batch Size: 64
 Test Size: 0.2
+Validation Size vom Trainingsanteil: 0.2
 Random State: 42
 Shuffle: True
 
@@ -37,6 +45,6 @@ Restore Best Weights: True
 
 Finale Ergebnisse
 -----------------
-Final Validation Loss: 0.0724
-Test MSE: 0.0724
-Test MAE: 0.1815
+Final Validation Loss: 0.0609
+Test MSE: 0.0642
+Test MAE: 0.1745

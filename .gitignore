@@ -78,7 +78,9 @@ data/*
 # Trained models and machine-learning artifacts
 Models/*
 models/*
+!Models/
 !Models/.gitkeep
+!Models/hyperparameters.txt
 !models/.gitkeep
 *.pkl
 *.pickle

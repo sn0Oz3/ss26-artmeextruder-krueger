@@ -1,0 +1,42 @@
+==============================
+Hyperparameter des MLP-Modells
+==============================
+
+Datenquelle: C:\Users\simon\Desktop\KIDM\data\recording_2026-06-11_13-53-40_preprocessed.csv
+Feature-Spalten: Temp Act (C), Extruder RPM, Puller RPM, Sensor Pos
+Ziel-Spalte: Diameter (mm)
+
+Modellarchitektur
+-----------------
+Input Dimension: 4
+Hidden Layer 1 Neuronen: 32
+Hidden Layer 2 Neuronen: 16
+Hidden Activation: relu
+Output Activation: linear
+Dropout Rate: 0.1
+
+Training
+--------
+Optimizer: adam
+Loss: mse
+Metrics: mae
+Epochs: 100
+Tatsaechlich trainierte Epochen: 100
+Batch Size: 32
+Test Size: 0.2
+Random State: 42
+Shuffle: True
+
+Early Stopping
+--------------
+Monitor: val_loss
+Mode: min
+Patience: 10
+Min Delta: 0.0001
+Restore Best Weights: True
+
+Finale Ergebnisse
+-----------------
+Final Validation Loss: 0.0724
+Test MSE: 0.0724
+Test MAE: 0.1815

@@ -20,11 +20,11 @@ def plot_preprocessed(df: pd.DataFrame) -> None:       #Plot zum Vergleich gefil
     """Display the preprocessed Diameter series in a simple plot."""
     fig, ax = plt.subplots(figsize=(10, 5))
 
-    ax.plot(range(len(df)), df["Diameter (mm)"], linewidth=1.5, color="#1f77b4", label="Filtered Diameter (mm)")
+    ax.plot(range(len(df)), df["Diameter (mm)"], linewidth=1.5, color="#ff7f0e", label="Filtered Diameter (mm)") 
 
     raw_diameter = df.attrs.get("raw_diameter")
     if raw_diameter is not None:
-        ax.plot(range(len(raw_diameter)), raw_diameter, linewidth=1.2, color="#ff7f0e", label="Raw Diameter (mm)")
+        ax.plot(range(len(raw_diameter)), raw_diameter, linewidth=1.2, color="#1f77b4", label="Raw Diameter (mm)") 
 
     ax.set_title("Preprocessed Diameter over Time[s]")
     ax.set_xlabel("Time [s]")

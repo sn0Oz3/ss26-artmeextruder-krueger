@@ -78,9 +78,9 @@ def build_mlp_model(
 def _suggest_hyperparameters(trial):
     # Optuna waehlt pro Trial Architektur und Trainingsparameter aus diesem
     # Suchraum aus.
-    layer_count = trial.suggest_int("hidden_layer_count", 1, 4)
+    layer_count = trial.suggest_int("hidden_layer_count", 1, 6)                             #--------------------------------- Anzahl hidden Layer (zw. 1-6)------------------------------
     hidden_units = [
-        trial.suggest_categorical(f"hidden_layer_{i + 1}_units", [8, 16, 32, 64, 128])
+        trial.suggest_categorical(f"hidden_layer_{i + 1}_units", [8, 16, 32, 64, 128])      #---------------------------- Anzahl Neuronen pro hidden Layer ------------------------------
         for i in range(layer_count)
     ]
 
@@ -163,7 +163,7 @@ def _optimize_hyperparameters(
             metrics=metrics,
         )
 
-        history = model.fit(
+        history = model.fit(                                # model.fit trainiert MOdel
             X_train,
             y_train,
             epochs=epochs,
@@ -217,7 +217,7 @@ def train_model(data, n_trials=30):
     test_size = 0.2
     validation_size = 0.2
     random_state = 42
-    shuffle = True
+    shuffle = True                 # Shuffle = True, damit Gewichtungen nicht hin und her springen koennen, wenn Daten nicht in zufaelliger Reihenfolge vorliegen (z.B. erst alle kleinen Durchmesser, dann alle grossen)
     epochs = 100
     early_stopping_settings = {
         "monitor": "val_loss",
@@ -301,9 +301,9 @@ def train_model(data, n_trials=30):
     # Training nicht verwendet wurde.
     test_loss, test_mae = mlp_model.evaluate(X_test, y_test, verbose=0)
 
-    # Alle Ergebnisse werden im Projektordner Models abgelegt, damit Prediction
+    # Alle Ergebnisse werden im Projektordner models abgelegt, damit Prediction
     # und Auswertung spaeter dieselben Artefakte verwenden koennen.
-    models_dir = Path(__file__).resolve().parent.parent / "Models"
+    models_dir = Path(__file__).resolve().parent.parent / "models"
     models_dir.mkdir(exist_ok=True)
 
     model_path = models_dir / "mlp_model.pkl"

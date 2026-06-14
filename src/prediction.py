@@ -12,7 +12,7 @@ def _load_prediction_artifacts():
         return _MODEL_CACHE
 
     project_dir = Path(__file__).resolve().parent.parent
-    models_dir = project_dir / "Models"
+    models_dir = project_dir / "models"
 
     model_path = models_dir / "mlp_model.pkl"
     scaler_path = models_dir / "scalers.pkl"

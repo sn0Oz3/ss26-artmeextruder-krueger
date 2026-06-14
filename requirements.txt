@@ -6,3 +6,4 @@ pyserial
 scikit-learn
 tensorflow
 keras
+optuna

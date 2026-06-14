@@ -26,8 +26,8 @@ def main():
     print(f"Ausgabe gespeichert unter: {output_path}")
     print(cleaned.head())
 
-    # Model Training
-    model_result = train_model(output_path)
+    # Model Training 
+    model_result = train_model(output_path, n_trials=80)
     print(model_result["message"])
 
     # Model Evaluation

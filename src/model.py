@@ -145,7 +145,7 @@ def train_model(data):
     #Speichern der Trainingshistorie, um sie spaeter in der Evaluation anzuzeigen.
     test_loss, test_mae = mlp_model.evaluate(X_test, y_test, verbose=0)
 
-    models_dir = Path(__file__).resolve().parent.parent / "Models"
+    models_dir = Path(__file__).resolve().parent.parent / "models"
     models_dir.mkdir(exist_ok=True)
 
     model_path = models_dir / "mlp_model.pkl"

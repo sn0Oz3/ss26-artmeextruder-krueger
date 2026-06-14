@@ -1,8 +1,7 @@
-==============================
 Hyperparameter des MLP-Modells
 ==============================
 
-Datenquelle: C:\Users\simon\Desktop\KIDM\data\recording_2026-06-11_13-53-40_preprocessed.csv
+Datenquelle: C:\Users\simon\Desktop\Hochschule\KIDM\Git\ss26-artmeextruder-krueger\data\recording_2026-06-10_13-53-40_preprocessed.csv
 Feature-Spalten: Temp Act (C), Extruder RPM, Puller RPM, Sensor Pos
 Ziel-Spalte: Diameter (mm)
 
@@ -21,7 +20,7 @@ Optimizer: adam
 Loss: mse
 Metrics: mae
 Epochs: 100
-Tatsaechlich trainierte Epochen: 100
+Tatsaechlich trainierte Epochen: 88
 Batch Size: 32
 Test Size: 0.2
 Random State: 42
@@ -37,6 +36,6 @@ Restore Best Weights: True
 
 Finale Ergebnisse
 -----------------
-Final Validation Loss: 0.0724
-Test MSE: 0.0724
-Test MAE: 0.1815
+Final Validation Loss: 0.0782
+Test MSE: 0.0740
+Test MAE: 0.1842

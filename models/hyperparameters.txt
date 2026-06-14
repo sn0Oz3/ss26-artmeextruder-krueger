@@ -8,17 +8,16 @@ Ziel-Spalte: Diameter (mm)
 Optuna
 ------
 Trials: 80
-Best Validation Loss: 0.1643
+Best Validation Loss: 0.1476
 Study gespeichert unter: C:\Users\simon\Desktop\Hochschule\KIDM\Git\ss26-artmeextruder-krueger\models\optuna_study.pkl
 
 Beste Optuna-Parameter
 ----------------------
-hidden_layer_count: 2
+hidden_layer_count: 1
 hidden_layer_1_units: 16
-hidden_layer_2_units: 16
-dropout_rate: 0.15
-l2_rate: 4.34066230582358e-05
-learning_rate: 0.0007966438537311645
+dropout_rate: 0.4
+l2_rate: 4.3894499380657516e-05
+learning_rate: 0.00017306339860671002
 batch_size: 64
 sequence_length: 60
 
@@ -28,26 +27,26 @@ Input Dimension: 240
 Original Feature Count: 4
 Sequence Length: 60
 Sequenz-Ziel: vorherige 60 Zeilen -> naechster Durchmesser
-Hidden Layers: 2
-Hidden Layer Neuronen: [16, 16]
+Hidden Layers: 1
+Hidden Layer Neuronen: [16]
 Hidden Activation: relu
 Output Activation: linear
-Dropout Rate: 0.15
-L2 Rate: 4.34066230582358e-05
+Dropout Rate: 0.4
+L2 Rate: 4.3894499380657516e-05
 
 Training
 --------
 Optimizer: adam
-Learning Rate: 0.0007966438537311645
+Learning Rate: 0.00017306339860671002
 Loss: mse
 Metrics: mae
 Epochs: 100
-Tatsaechlich trainierte Epochen: 15
+Tatsaechlich trainierte Epochen: 18
 Batch Size: 64
 Test Size: 0.2
 Validation Size vom Trainingsanteil: 0.2
 Random State: 42
-Shuffle: False
+Shuffle: True
 
 Early Stopping
 --------------
@@ -59,13 +58,13 @@ Restore Best Weights: True
 
 Finale Ergebnisse
 -----------------
-Final Training Loss: 0.0613
-Final Validation Loss: 0.2828
-Test MSE: 0.2617
-Test MAE: 0.4086
+Final Training Loss: 0.0908
+Final Validation Loss: 0.2056
+Test MSE: 0.1990
+Test MAE: 0.3389
 
 Rueckskalierte Fehler in mm
 --------------------------
-Final Training MAE: 0.0129 mm
-Final Validation MAE: 0.0306 mm
-Test MAE: 0.0287 mm
+Final Training MAE: 0.0151 mm
+Final Validation MAE: 0.0237 mm
+Test MAE: 0.0238 mm

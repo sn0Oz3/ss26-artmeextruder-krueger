@@ -283,7 +283,7 @@ def train_model(data, n_trials=80):
     test_size = 0.2
     validation_size = 0.2
     random_state = 42
-    shuffle = False
+    shuffle = True
     epochs = 100
     early_stopping_settings = {
         "monitor": "val_loss",

@@ -90,6 +90,18 @@ def _update_actual_diameter(app, diameter):
     )
 
 
+def _update_predicted_diameter_with_error(app, prediction, actual_diameter):
+    if prediction is None or pd.isna(actual_diameter):
+        app._metric_labels["fil_width_predicted"].config(text="--", fg=INK)
+        return
+
+    prediction_error = abs(prediction - actual_diameter)
+    app._metric_labels["fil_width_predicted"].config(
+        text=f"{prediction:.3f} +/- {prediction_error:.3f}",
+        fg=GOOD if prediction_error <= DIA_TOL else BAD,
+    )
+
+
 # Skript zum Testen der GUI -> Ich muss nicht immer zum Filamentextruder laufen, um die Vorhersage zu testen.
 # Die CSV wird zeilenweise abgespielt; ab Zeile 41 wird aus den vorherigen 40 Zeilen der naechste Durchmesser vorhergesagt.
 def main():
@@ -131,6 +143,7 @@ def main():
         csv_diameter_reader.set(row["Diameter (mm)"])
         app._update_metrics(data)
         _update_actual_diameter(app, row["Diameter (mm)"])
+        _update_predicted_diameter_with_error(app, prediction, row["Diameter (mm)"])
 
         replay_state["row_index"] += 1
         if replay_state["row_index"] < len(csv_df):

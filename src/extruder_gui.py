@@ -588,6 +588,33 @@ class MonitorApp:
     # ──────────────────────────────────────────────────────────────────────────
     #  METRIC UPDATES
     # ──────────────────────────────────────────────────────────────────────────
+    def _current_measured_diameter(self):
+        if not self.messuhr_online or not self.messuhr_obj:
+            return None
+
+        diameter = self.messuhr_obj.get()
+        if diameter is None or not math.isfinite(diameter):
+            return None
+
+        return diameter
+
+    def _format_prediction_with_error(self, prediction):
+        if prediction is None or not math.isfinite(prediction):
+            return "--", INK
+
+        measured_diameter = self._current_measured_diameter()
+        if measured_diameter is None:
+            return (
+                f"{prediction:.3f}",
+                GOOD if abs(prediction - DIA_TARGET) <= DIA_TOL else BAD,
+            )
+
+        prediction_error = abs(prediction - measured_diameter)
+        return (
+            f"{prediction:.3f} +/- {prediction_error:.3f}",
+            GOOD if prediction_error <= DIA_TOL else BAD,
+        )
+
     def _update_metrics(self, data):
         self.current_data = data
         act    = data.get("actual_temp", 0)
@@ -604,10 +631,9 @@ class MonitorApp:
         self._metric_labels["actual_temp"].config(
             text=f"{act:.1f}/{tgt:.0f}" if act > 0 else "--",
             fg=(GOOD if abs(act - tgt) <= TEMP_TOL else BAD) if act > 0 else INK)
+        prediction_text, prediction_color = self._format_prediction_with_error(pred)
         self._metric_labels["fil_width_predicted"].config(
-            text=f"{pred:.3f}" if pred is not None and math.isfinite(pred) else "--",
-            fg=(GOOD if abs(pred - DIA_TARGET) <= DIA_TOL else BAD)
-            if pred is not None and math.isfinite(pred) else INK)
+            text=prediction_text, fg=prediction_color)
         self._metric_labels["extruder_rpm"].config(
             text=f"{rpm:.1f}" if rpm > 0 else "--", fg=INK)
         self._metric_labels["puller_speed"].config(

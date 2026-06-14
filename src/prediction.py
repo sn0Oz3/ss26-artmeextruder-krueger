@@ -1,9 +1,12 @@
 import pickle
+import re
 from pathlib import Path
 
 import numpy as np
 
 _MODEL_CACHE = None
+_TEST_MAE_CACHE = None
+_TEST_MAE_LOADED = False
 DEFAULT_FEATURE_COLUMNS = ['Temp Act (C)', 'Extruder RPM', 'Puller RPM', 'Sensor Pos']
 DEFAULT_SEQUENCE_LENGTH = 60
 
@@ -27,6 +30,36 @@ def _load_prediction_artifacts():
 
     _MODEL_CACHE = model, scalers
     return _MODEL_CACHE
+
+
+def _read_test_mae_mm_from_report():
+    project_dir = Path(__file__).resolve().parent.parent
+    report_path = project_dir / "models" / "hyperparameters.txt"
+    if not report_path.exists():
+        return None
+
+    report_text = report_path.read_text(encoding="utf-8", errors="ignore")
+    match = re.search(r"Test MAE:\s*([0-9]+(?:\.[0-9]+)?)\s*mm", report_text)
+    if match is None:
+        return None
+
+    return float(match.group(1))
+
+
+def get_test_mae_mm():
+    global _TEST_MAE_CACHE, _TEST_MAE_LOADED
+    if _TEST_MAE_LOADED:
+        return _TEST_MAE_CACHE
+
+    _model, scalers = _load_prediction_artifacts()
+    test_mae_mm = scalers.get("test_mae_mm")
+    if test_mae_mm is not None:
+        _TEST_MAE_CACHE = float(test_mae_mm)
+    else:
+        _TEST_MAE_CACHE = _read_test_mae_mm_from_report()
+
+    _TEST_MAE_LOADED = True
+    return _TEST_MAE_CACHE
 
 
 def _prepare_sequence_input(last_rows, feature_columns, sequence_length):
@@ -75,8 +108,11 @@ if __name__ == "__main__":
     example_row = [187.9, 12.0, 23.56, 6.62]
     example_rows = np.tile(example_row, (DEFAULT_SEQUENCE_LENGTH, 1))
     diameter = predict_diameter(example_rows)
+    test_mae_mm = get_test_mae_mm()
 
     print(f"Vorhergesagter Durchmesser: {diameter:.3f} mm")
+    if test_mae_mm is not None:
+        print(f"Rueckskalierter Test MAE: +/- {test_mae_mm:.3f} mm")
 
 # Aus Datensatz:
 # 1.8,184.0,10.0,14.34,6.36

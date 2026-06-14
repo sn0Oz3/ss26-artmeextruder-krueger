@@ -21,10 +21,11 @@ except ImportError:
     SERIAL_OK = False
 
 try:
-    from prediction import DEFAULT_SEQUENCE_LENGTH, predict_diameter
+    from prediction import DEFAULT_SEQUENCE_LENGTH, get_test_mae_mm, predict_diameter
     PREDICTION_OK = True
 except Exception as e:
     DEFAULT_SEQUENCE_LENGTH = 40
+    get_test_mae_mm = None
     predict_diameter = None
     PREDICTION_OK = False
     print(f"Prediction not available: {e}")
@@ -598,21 +599,20 @@ class MonitorApp:
 
         return diameter
 
-    def _format_prediction_with_error(self, prediction):
+    def _format_prediction_with_test_mae(self, prediction):
         if prediction is None or not math.isfinite(prediction):
             return "--", INK
 
-        measured_diameter = self._current_measured_diameter()
-        if measured_diameter is None:
+        test_mae_mm = get_test_mae_mm() if get_test_mae_mm is not None else None
+        if test_mae_mm is None:
             return (
                 f"{prediction:.3f}",
                 GOOD if abs(prediction - DIA_TARGET) <= DIA_TOL else BAD,
             )
 
-        prediction_error = abs(prediction - measured_diameter)
         return (
-            f"{prediction:.3f} +/- {prediction_error:.3f}",
-            GOOD if prediction_error <= DIA_TOL else BAD,
+            f"{prediction:.3f} +/- {test_mae_mm:.3f}",
+            GOOD if abs(prediction - DIA_TARGET) + test_mae_mm <= DIA_TOL else BAD,
         )
 
     def _update_metrics(self, data):
@@ -631,7 +631,7 @@ class MonitorApp:
         self._metric_labels["actual_temp"].config(
             text=f"{act:.1f}/{tgt:.0f}" if act > 0 else "--",
             fg=(GOOD if abs(act - tgt) <= TEMP_TOL else BAD) if act > 0 else INK)
-        prediction_text, prediction_color = self._format_prediction_with_error(pred)
+        prediction_text, prediction_color = self._format_prediction_with_test_mae(pred)
         self._metric_labels["fil_width_predicted"].config(
             text=prediction_text, fg=prediction_color)
         self._metric_labels["extruder_rpm"].config(

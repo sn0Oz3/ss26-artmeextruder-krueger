@@ -414,6 +414,7 @@ def train_model(data, n_trials=80):
                 "feature_columns": feature_columns,
                 "target_column": target_column,
                 "sequence_length": sequence_length,
+                "test_mae_mm": test_mae_mm,
             },
             scaler_file,
         )

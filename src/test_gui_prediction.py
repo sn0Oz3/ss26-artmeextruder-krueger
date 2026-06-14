@@ -1,11 +1,17 @@
 import argparse
+from io import StringIO
 from pathlib import Path
 import tkinter as tk
 
 import pandas as pd
 
 from extruder_gui import BAD, DIA_TARGET, DIA_TOL, GOOD, INK, MonitorApp
-from prediction import DEFAULT_FEATURE_COLUMNS, DEFAULT_SEQUENCE_LENGTH, predict_diameter
+from prediction import (
+    DEFAULT_FEATURE_COLUMNS,
+    DEFAULT_SEQUENCE_LENGTH,
+    get_test_mae_mm,
+    predict_diameter,
+)
 
 # ----------------------------------------------------------------------------------------------------------------------
 # Test der Gui: CSV-Datei wird zeilenweise abgespielt; ab Zeile 41 wird auch aus den vorherigen 40 Zeilen der naechste Durchmesser vorhergesagt.
@@ -13,7 +19,7 @@ from prediction import DEFAULT_FEATURE_COLUMNS, DEFAULT_SEQUENCE_LENGTH, predict
 # Wie schnell die CSV-Zeilen nacheinander in der GUI angezeigt werden.
 REPLAY_INTERVAL_MS = 500
 
-# Diese Werte stehen nicht in der preprocessed CSV, werden aber von der GUI erwartet.
+# Diese Fallback-Werte werden genutzt, falls eine CSV die Spalten nicht enthaelt.
 DEFAULT_TARGET_TEMP = 190.0
 DEFAULT_FAN_PCT = 45
 
@@ -21,7 +27,7 @@ DEFAULT_FAN_PCT = 45
 DEFAULT_CSV_PATH = (
     Path(__file__).resolve().parent.parent
     / "data"
-    / "recording_2026-06-10_13-53-40_preprocessed.csv"
+    / "recording_2026-06-10_13-53-40.csv"
 )
 
 
@@ -47,18 +53,52 @@ class CsvDiameterReader:
 
 def _parse_args():
     # Erlaubt optional einen eigenen CSV-Pfad beim Starten:
-    # python src/test_gui_prediction.py data/meine_datei_preprocessed.csv
+    # python src/test_gui_prediction.py data/meine_datei.csv
     parser = argparse.ArgumentParser(
-        description="Replay a preprocessed CSV in the GUI and predict the next diameter."
+        description="Replay a recording CSV in the GUI and predict the next diameter."
     )
     parser.add_argument(
         "csv_path",
         nargs="?",
         default=DEFAULT_CSV_PATH,
         type=Path,
-        help="Path to a preprocessed CSV file.",
+        help="Path to a recording CSV file.",
     )
     return parser.parse_args()
+
+
+def _load_recording_csv(csv_path):
+    lines = csv_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    header_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.startswith("Timestamp,") or line.startswith("Diameter (mm),")
+        ),
+        None,
+    )
+    if header_index is None:
+        raise ValueError(f"{csv_path} enthaelt keine CSV-Kopfzeile mit Messwerten.")
+
+    data_lines = []
+    for line in lines[header_index:]:
+        if not line.strip():
+            continue
+        if line.startswith("---"):
+            break
+        if line.startswith(("Ended:", "Total samples:", "Within tolerance:", "Exceeded tolerance:", "STATUS:")):
+            break
+        data_lines.append(line)
+
+    csv_df = pd.read_csv(StringIO("\n".join(data_lines)))
+    required_columns = ["Diameter (mm)", *DEFAULT_FEATURE_COLUMNS]
+    optional_numeric_columns = ["Temp Tgt (C)", "Fan %"]
+    for column in [*required_columns, *optional_numeric_columns]:
+        if column in csv_df.columns:
+            csv_df[column] = pd.to_numeric(csv_df[column], errors="coerce")
+
+    csv_df = csv_df.dropna(subset=required_columns).reset_index(drop=True)
+    return csv_df
 
 
 def _validate_csv(csv_df, csv_path):
@@ -84,12 +124,12 @@ def _row_to_gui_data(row, reading_no, prediction):
         "reading_no": reading_no,
         "elapsed": 0,
         "actual_temp": row["Temp Act (C)"],
-        "target_temp": DEFAULT_TARGET_TEMP,
+        "target_temp": row.get("Temp Tgt (C)", DEFAULT_TARGET_TEMP),
         "extruder_rpm": row["Extruder RPM"],
         "puller_speed": row["Puller RPM"],
         "fil_width": row["Sensor Pos"],
         "fil_width_predicted": prediction,
-        "fan_pct": DEFAULT_FAN_PCT,
+        "fan_pct": row.get("Fan %", DEFAULT_FAN_PCT),
     }
 
 
@@ -106,27 +146,34 @@ def _update_actual_diameter(app, diameter):
     )
 
 
-def _update_predicted_diameter_with_error(app, prediction, actual_diameter):
-    # Zeigt die Vorhersage zusammen mit dem absoluten Fehler an:
+def _update_predicted_diameter_with_test_mae(app, prediction):
+    # Zeigt die Vorhersage zusammen mit dem rueckskalierten Test-MAE an:
     # Beispiel: 1.734 +/- 0.012
-    if prediction is None or pd.isna(actual_diameter):
+    if prediction is None:
         app._metric_labels["fil_width_predicted"].config(text="--", fg=INK)
         return
 
-    prediction_error = abs(prediction - actual_diameter)
+    test_mae_mm = get_test_mae_mm()
+    if test_mae_mm is None:
+        app._metric_labels["fil_width_predicted"].config(
+            text=f"{prediction:.3f}",
+            fg=GOOD if abs(prediction - DIA_TARGET) <= DIA_TOL else BAD,
+        )
+        return
+
     app._metric_labels["fil_width_predicted"].config(
-        text=f"{prediction:.3f} +/- {prediction_error:.3f}",
-        fg=GOOD if prediction_error <= DIA_TOL else BAD,
+        text=f"{prediction:.3f} +/- {test_mae_mm:.3f}",
+        fg=GOOD if abs(prediction - DIA_TARGET) + test_mae_mm <= DIA_TOL else BAD,
     )
 
 
 # Skript zum Testen der GUI -> Ich muss nicht immer zum Filamentextruder laufen, um die Vorhersage zu testen.
-# Die CSV wird zeilenweise abgespielt; ab Zeile 41 wird aus den vorherigen 40 Zeilen der naechste Durchmesser vorhergesagt.
+# Die CSV wird zeilenweise abgespielt; ab Zeile 61 wird aus den vorherigen 60 Zeilen der naechste Durchmesser vorhergesagt.
 def main():
     # CSV laden und pruefen, bevor die GUI gestartet wird.
     args = _parse_args()
     csv_path = args.csv_path.resolve()
-    csv_df = pd.read_csv(csv_path)
+    csv_df = _load_recording_csv(csv_path)
     _validate_csv(csv_df, csv_path)
 
     # Normale Monitor-GUI erstellen.
@@ -155,7 +202,7 @@ def main():
 
         if row_index >= DEFAULT_SEQUENCE_LENGTH:
             # Fuer eine Vorhersage braucht das Modell die vorherigen DEFAULT_SEQUENCE_LENGTH Zeilen.
-            # Die aktuelle Zeile ist dann der Wert, mit dem der Fehler verglichen wird.
+            # Die aktuelle Zeile ist der naechste Zeitpunkt, fuer den vorhergesagt wird.
             previous_rows = csv_df.iloc[
                 row_index - DEFAULT_SEQUENCE_LENGTH:row_index
             ][DEFAULT_FEATURE_COLUMNS]
@@ -172,7 +219,7 @@ def main():
         csv_diameter_reader.set(row["Diameter (mm)"])
         app._update_metrics(data)
         _update_actual_diameter(app, row["Diameter (mm)"])
-        _update_predicted_diameter_with_error(app, prediction, row["Diameter (mm)"])
+        _update_predicted_diameter_with_test_mae(app, prediction)
 
         replay_state["row_index"] += 1
         if replay_state["row_index"] < len(csv_df):

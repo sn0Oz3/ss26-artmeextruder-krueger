@@ -4,6 +4,8 @@ from pathlib import Path
 import numpy as np
 
 _MODEL_CACHE = None
+DEFAULT_FEATURE_COLUMNS = ['Temp Act (C)', 'Extruder RPM', 'Puller RPM', 'Sensor Pos']
+DEFAULT_SEQUENCE_LENGTH = 60
 
 
 def _load_prediction_artifacts():
@@ -26,17 +28,39 @@ def _load_prediction_artifacts():
     _MODEL_CACHE = model, scalers
     return _MODEL_CACHE
 
-# Funktion ist als Test des vorher trainierten Modells gedacht -> Parameter können ab Zeile 51 angepasst werden -> Sagt Durchmesser vorher
-# This function predicts the diameter of a filament based on the input parameters und des zuvor trainierten Modells
-def predict_diameter(temp_act, extruder_rpm, puller_rpm, sensor_pos):
+
+def _prepare_sequence_input(last_rows, feature_columns, sequence_length):
+    if hasattr(last_rows, "columns"):
+        missing_columns = [column for column in feature_columns if column not in last_rows.columns]
+        if missing_columns:
+            raise ValueError(f"Folgende Feature-Spalten fehlen: {', '.join(missing_columns)}")
+        input_values = last_rows[feature_columns].to_numpy()
+    else:
+        input_values = np.asarray(last_rows, dtype=float)
+
+    expected_shape = (sequence_length, len(feature_columns))
+    if input_values.shape != expected_shape:
+        raise ValueError(
+            f"Die Vorhersage erwartet genau {expected_shape[0]} Zeilen "
+            f"mit jeweils {expected_shape[1]} Features. Erhalten: {input_values.shape}"
+        )
+
+    return input_values
+
+
+# This function predicts the next filament diameter from the previous rows.
+def predict_diameter(last_rows):
     model, scalers = _load_prediction_artifacts()
 
     feature_scaler = scalers["feature_scaler"]
     diameter_scaler = scalers["diameter_scaler"]
+    feature_columns = scalers.get("feature_columns", DEFAULT_FEATURE_COLUMNS)
+    sequence_length = scalers.get("sequence_length", DEFAULT_SEQUENCE_LENGTH)
 
-    input_values = np.array([[temp_act, extruder_rpm, puller_rpm, sensor_pos]])
-
+    input_values = _prepare_sequence_input(last_rows, feature_columns, sequence_length)
     input_scaled = feature_scaler.transform(input_values)
+    input_scaled = input_scaled.flatten().reshape(1, -1)
+
     try:
         prediction_scaled = model.predict(input_scaled, verbose=0)
     except TypeError:
@@ -45,14 +69,12 @@ def predict_diameter(temp_act, extruder_rpm, puller_rpm, sensor_pos):
 
     return float(prediction_mm[0][0])
 
+
 # Hier wird die Funktion mit Beispielwerten aufgerufen, um den vorhergesagten Durchmesser zu berechnen und auszugeben.
 if __name__ == "__main__":
-    diameter = predict_diameter(
-        temp_act=187.9,
-        extruder_rpm=12.0,
-        puller_rpm=23.56,
-        sensor_pos=6.62,
-    )
+    example_row = [187.9, 12.0, 23.56, 6.62]
+    example_rows = np.tile(example_row, (DEFAULT_SEQUENCE_LENGTH, 1))
+    diameter = predict_diameter(example_rows)
 
     print(f"Vorhergesagter Durchmesser: {diameter:.3f} mm")
 

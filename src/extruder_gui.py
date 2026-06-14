@@ -11,6 +11,7 @@ import time
 import re
 import csv
 import math
+from collections import deque
 from datetime import datetime
 
 try:
@@ -20,9 +21,10 @@ except ImportError:
     SERIAL_OK = False
 
 try:
-    from prediction import predict_diameter
+    from prediction import DEFAULT_SEQUENCE_LENGTH, predict_diameter
     PREDICTION_OK = True
 except Exception as e:
+    DEFAULT_SEQUENCE_LENGTH = 40
     predict_diameter = None
     PREDICTION_OK = False
     print(f"Prediction not available: {e}")
@@ -272,6 +274,7 @@ class MonitorApp:
         self.messuhr_online = False
         self._destroyed     = False
         self._prediction_error_reported = False
+        self._prediction_feature_history = deque(maxlen=DEFAULT_SEQUENCE_LENGTH)
 
         # recording state
         self._rec_active    = False
@@ -639,6 +642,7 @@ class MonitorApp:
             self.running      = True
             self.start_time   = time.time()
             self.reading_no   = 0
+            self._prediction_feature_history.clear()
             self.dot_artme.config(fg=GOOD)
             threading.Thread(target=self._data_loop, daemon=True).start()
         except Exception as e:
@@ -704,15 +708,16 @@ class MonitorApp:
         puller_rpm = data.get("puller_speed", 0)
         sensor_pos = data.get("fil_width", 0)
         if min(temp_act, extruder_rpm, puller_rpm, sensor_pos) <= 0:
+            self._prediction_feature_history.clear()
+            return None
+
+        feature_row = [temp_act, extruder_rpm, puller_rpm, sensor_pos]
+        self._prediction_feature_history.append(feature_row)
+        if len(self._prediction_feature_history) < DEFAULT_SEQUENCE_LENGTH:
             return None
 
         try:
-            prediction_mm = predict_diameter(
-                temp_act=temp_act,
-                extruder_rpm=extruder_rpm,
-                puller_rpm=puller_rpm,
-                sensor_pos=sensor_pos,
-            )
+            prediction_mm = predict_diameter(list(self._prediction_feature_history))
             self._prediction_error_reported = False
             return prediction_mm
         except Exception as e:

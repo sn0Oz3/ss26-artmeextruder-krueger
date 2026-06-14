@@ -7,35 +7,45 @@ Ziel-Spalte: Diameter (mm)
 
 Modellarchitektur
 -----------------
-Input Dimension: 4
-Hidden Layer 1 Neuronen: 32
-Hidden Layer 2 Neuronen: 16
+Input Dimension: 240
+Original Feature Count: 4
+Sequence Length: 60
+Sequenz-Ziel: vorherige 60 Zeilen -> naechster Durchmesser
+Hidden Layer 1 Neuronen: 16
+Hidden Layer 2 Neuronen: 8
 Hidden Activation: relu
 Output Activation: linear
-Dropout Rate: 0.1
+Dropout Rate: 0.3
 
 Training
 --------
 Optimizer: adam
+Learning Rate: 0.0003
 Loss: mse
 Metrics: mae
 Epochs: 100
-Tatsaechlich trainierte Epochen: 88
+Tatsaechlich trainierte Epochen: 8
 Batch Size: 32
 Test Size: 0.2
 Random State: 42
-Shuffle: True
+Shuffle: False
 
 Early Stopping
 --------------
 Monitor: val_loss
 Mode: min
-Patience: 10
-Min Delta: 0.0001
+Patience: 5
+Min Delta: 0.0003
 Restore Best Weights: True
 
 Finale Ergebnisse
 -----------------
-Final Validation Loss: 0.0782
-Test MSE: 0.0740
-Test MAE: 0.1842
+Final Validation Loss: 0.1479
+Test MSE: 0.1435
+Test MAE: 0.2442
+
+Rueckskalierte Fehler in mm
+--------------------------
+Final Training MAE: 0.0154 mm
+Final Validation MAE: 0.0172 mm
+Test MAE: 0.0171 mm

@@ -76,12 +76,10 @@ data/*
 *.xls
 
 # Trained models and machine-learning artifacts
-Models/*
 models/*
-!Models/
-!Models/.gitkeep
-!Models/hyperparameters.txt
+!models/
 !models/.gitkeep
+!models/hyperparameters.txt
 *.pkl
 *.pickle
 *.joblib

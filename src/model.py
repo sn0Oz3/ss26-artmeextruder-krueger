@@ -1,6 +1,7 @@
 import pickle
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -49,6 +50,24 @@ def build_mlp_model(
     return model
 
 
+def create_sequences(features, targets, sequence_length):
+    if len(features) <= sequence_length:
+        raise ValueError(
+            f"Mindestens {sequence_length + 1} Datenzeilen werden benoetigt, "
+            "um aus den vorherigen Zeilen den naechsten Durchmesser zu lernen."
+        )
+
+    sequence_features = []
+    sequence_targets = []
+
+    for row_index in range(sequence_length, len(features)):
+        previous_rows = features[row_index - sequence_length:row_index]
+        sequence_features.append(previous_rows.flatten())
+        sequence_targets.append(targets[row_index])
+
+    return np.array(sequence_features), np.array(sequence_targets)
+
+
 def train_model(data):
     csv_path = Path(data)
 
@@ -56,23 +75,25 @@ def train_model(data):
     target_column = 'Diameter (mm)'
 
     # Parameter Multi-Layer-Perceptron
-    hidden_layer_1_units = 32
-    hidden_layer_2_units = 16
-    dropout_rate = 0.1
+    hidden_layer_1_units = 16
+    hidden_layer_2_units = 8
+    dropout_rate = 0.3
     hidden_activation = "relu"
     output_activation = "linear"
-    optimizer = "adam"
+    optimizer_name = "adam"
+    optimizer_learning_rate = 0.0003
     loss = "mse"
     metrics = ["mae"]
+    sequence_length = 60                    # Anzahl vorheriger Zeilen, die fuer die Vorhersage des naechsten Durchmessers verwendet werden. -> 60 Zeilen entsprechen 60 Sekunden, da die Aufzeichnung mit ca. 1Hz erfolgt.
     test_size = 0.2
     random_state = 42
-    shuffle = True
+    shuffle = False  # Da es sich um Zeitreihendaten handelt, sollte nicht gemischt werden.
     epochs = 100
     batch_size = 32
     early_stopping_monitor = "val_loss"
     early_stopping_mode = "min"
-    early_stopping_patience = 10
-    early_stopping_min_delta = 0.0001
+    early_stopping_patience = 5
+    early_stopping_min_delta = 0.0003
     early_stopping_restore_best_weights = True
 
     # Read the CSV passed from main.py directly.
@@ -90,14 +111,30 @@ def train_model(data):
     feature_array_scaled = scaler_feature.fit_transform(feature_array)
     diameter_array_scaled = scaler_diameter.fit_transform(diameter_array)
 
-    # Train/Test Split fuer das spaetere Training eines Multi-Layer-Perceptrons.
-    X_train, X_test, y_train, y_test = train_test_split(
+    sequence_features, sequence_targets = create_sequences(
         feature_array_scaled,
         diameter_array_scaled,
+        sequence_length,
+    )
+
+    # Train/Test Split fuer das spaetere Training eines Multi-Layer-Perceptrons.
+    X_train, X_test, y_train, y_test = train_test_split(
+        sequence_features,
+        sequence_targets,
         test_size=test_size,
         random_state=random_state,
         shuffle=shuffle,
     )
+
+    try:
+        from keras.optimizers import Adam
+    except ImportError as exc:
+        raise ImportError(
+            "TensorFlow/Keras wird fuer das Multi-Layer-Perceptron benoetigt. "
+            "Installiere es z.B. mit: pip install tensorflow"
+        ) from exc
+
+    optimizer = Adam(learning_rate=optimizer_learning_rate)
 
     #MLP wird gebaut
     mlp_model = build_mlp_model(
@@ -144,6 +181,10 @@ def train_model(data):
 
     #Speichern der Trainingshistorie, um sie spaeter in der Evaluation anzuzeigen.
     test_loss, test_mae = mlp_model.evaluate(X_test, y_test, verbose=0)
+    diameter_scale_mm = scaler_diameter.scale_[0]
+    final_training_mae_mm = history.history["mae"][-1] * diameter_scale_mm
+    final_validation_mae_mm = history.history["val_mae"][-1] * diameter_scale_mm
+    test_mae_mm = test_mae * diameter_scale_mm
 
     models_dir = Path(__file__).resolve().parent.parent / "models"
     models_dir.mkdir(exist_ok=True)
@@ -161,6 +202,9 @@ def train_model(data):
             {
                 "feature_scaler": scaler_feature,
                 "diameter_scaler": scaler_diameter,
+                "feature_columns": feature_columns,
+                "target_column": target_column,
+                "sequence_length": sequence_length,
             },
             scaler_file,
         )
@@ -178,6 +222,9 @@ def train_model(data):
         "Modellarchitektur\n"
         "-----------------\n"
         f"Input Dimension: {X_train.shape[1]}\n"
+        f"Original Feature Count: {len(feature_columns)}\n"
+        f"Sequence Length: {sequence_length}\n"
+        f"Sequenz-Ziel: vorherige {sequence_length} Zeilen -> naechster Durchmesser\n"
         f"Hidden Layer 1 Neuronen: {hidden_layer_1_units}\n"
         f"Hidden Layer 2 Neuronen: {hidden_layer_2_units}\n"
         f"Hidden Activation: {hidden_activation}\n"
@@ -185,7 +232,8 @@ def train_model(data):
         f"Dropout Rate: {dropout_rate}\n\n"
         "Training\n"
         "--------\n"
-        f"Optimizer: {optimizer}\n"
+        f"Optimizer: {optimizer_name}\n"
+        f"Learning Rate: {optimizer_learning_rate}\n"
         f"Loss: {loss}\n"
         f"Metrics: {', '.join(metrics)}\n"
         f"Epochs: {epochs}\n"
@@ -205,7 +253,12 @@ def train_model(data):
         "-----------------\n"
         f"Final Validation Loss: {history.history['val_loss'][-1]:.4f}\n"
         f"Test MSE: {test_loss:.4f}\n"
-        f"Test MAE: {test_mae:.4f}\n"
+        f"Test MAE: {test_mae:.4f}\n\n"
+        "Rueckskalierte Fehler in mm\n"
+        "--------------------------\n"
+        f"Final Training MAE: {final_training_mae_mm:.4f} mm\n"
+        f"Final Validation MAE: {final_validation_mae_mm:.4f} mm\n"
+        f"Test MAE: {test_mae_mm:.4f} mm\n"
     )
     hyperparameter_path.write_text(hyperparameter_text, encoding="utf-8")
 
@@ -215,12 +268,15 @@ def train_model(data):
         f"Model trained on {len(csv_df)} rows "
         f"with feature array shape {feature_array_scaled.shape}"
         f"and diameter array shape {diameter_array_scaled.shape}"
+        f", sequence shape {sequence_features.shape}/{sequence_targets.shape}"
+        f", sequence length {sequence_length}"
         f", train shape {X_train.shape}/{y_train.shape}"
         f", test shape {X_test.shape}/{y_test.shape}"
         f", trained epochs {len(history.history['loss'])}"
         f", final validation loss {history.history['val_loss'][-1]:.4f}"
         f", test MSE {test_loss:.4f}"
         f", test MAE {test_mae:.4f}"
+        f", test MAE {test_mae_mm:.4f} mm"
         f", model saved to {model_path}"
         f", scalers saved to {scaler_path}"
         f", training history saved to {history_path}"

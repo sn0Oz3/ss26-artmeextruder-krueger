@@ -1,4 +1,5 @@
 import pickle
+import random
 from pathlib import Path
 
 import numpy as np
@@ -10,11 +11,12 @@ from feature_engineering import DIAMETER_COLUMN, MODEL_FEATURE_COLUMNS, add_diam
 
 
 MODEL_ARCHITECTURES = {
-    # Kleine, sinnvolle Kandidaten statt sehr vieler frei kombinierbarer Layer.
+    # Sinnvolle Kandidaten statt sehr vieler frei kombinierbarer Layer.
     # Die Namen landen auch in hyperparameters.txt und machen den Optuna-Lauf lesbarer.
-    "small_8": [8],
-    "small_16": [16],
-    "two_layer_16_8": [16, 8],
+    "small_32_16": [32, 16],
+    "medium_64_32": [64, 32],
+    "medium_64_32_16": [64, 32, 16],
+    "wide_128_64": [128, 64],
 }
 FIXED_SEQUENCE_LENGTH = 60
 
@@ -61,6 +63,32 @@ def _create_early_stopping(
     )
 
 
+def _create_reduce_lr_on_plateau(monitor, mode, factor, patience, min_delta, min_lr):
+    # Wenn die Validation Loss stagniert, wird die Lernrate reduziert.
+    # Dadurch kann das Modell nach einer groben Anfangsphase feiner nachoptimieren.
+    try:
+        from keras.callbacks import ReduceLROnPlateau
+    except ImportError as exc:
+        _keras_import_error(exc)
+
+    return ReduceLROnPlateau(
+        monitor=monitor,
+        mode=mode,
+        factor=factor,
+        patience=patience,
+        min_delta=min_delta,
+        min_lr=min_lr,
+        verbose=0,
+    )
+
+
+def _create_training_callbacks(early_stopping_settings, reduce_lr_settings):
+    return [
+        _create_reduce_lr_on_plateau(**reduce_lr_settings),
+        _create_early_stopping(**early_stopping_settings),
+    ]
+
+
 def _clear_keras_session():
     # Bei der Optuna-Suche werden viele Modelle nacheinander gebaut.
     # clear_session raeumt alte Keras-Modelle aus dem Speicher.
@@ -68,6 +96,17 @@ def _clear_keras_session():
         from keras import backend
 
         backend.clear_session()
+    except ImportError:
+        pass
+
+
+def _set_training_seed(random_state):
+    random.seed(random_state)
+    np.random.seed(random_state)
+    try:
+        import tensorflow as tf
+
+        tf.keras.utils.set_random_seed(random_state)
     except ImportError:
         pass
 
@@ -186,10 +225,10 @@ def _suggest_hyperparameters(trial):
     return {
         "architecture": architecture,
         "hidden_units": MODEL_ARCHITECTURES[architecture],
-        "dropout_rate": trial.suggest_categorical("dropout_rate", [0.0, 0.1, 0.2]),
-        "l2_rate": trial.suggest_categorical("l2_rate", [1e-4, 1e-3]),
-        "learning_rate": trial.suggest_categorical("learning_rate", [1e-4, 3e-4]),
-        "batch_size": trial.suggest_categorical("batch_size", [32, 64]),
+        "dropout_rate": trial.suggest_categorical("dropout_rate", [0.0, 0.05, 0.1]),
+        "l2_rate": trial.suggest_categorical("l2_rate", [0.0, 1e-6, 1e-5, 1e-4]),
+        "learning_rate": trial.suggest_categorical("learning_rate", [1e-4, 3e-4, 1e-3]),
+        "batch_size": trial.suggest_categorical("batch_size", [16, 32, 64]),
         # Die Sequenzlaenge bleibt fest, damit Training, gespeichertes Modell
         # und GUI immer dieselbe Anzahl vorheriger Messzeilen verwenden.
         "sequence_length": FIXED_SEQUENCE_LENGTH,
@@ -232,6 +271,7 @@ def _optimize_hyperparameters(
     hidden_activation,
     output_activation,
     early_stopping_settings,
+    reduce_lr_settings,
 ):
     # Diese Funktion fuehrt die Optuna-Suche aus.
     # Jeder Trial ist ein kompletter Testlauf mit einer anderen Modellarchitektur.
@@ -265,6 +305,7 @@ def _optimize_hyperparameters(
 
         # Fuer jeden Trial wird ein frisches Modell gebaut und trainiert.
         _clear_keras_session()
+        _set_training_seed(random_state + trial.number)
         model = build_mlp_model(
             input_dim=X_train.shape[1],
             hidden_units=params["hidden_units"],
@@ -283,12 +324,12 @@ def _optimize_hyperparameters(
             epochs=epochs,
             batch_size=params["batch_size"],
             validation_data=(X_val, y_val),
-            callbacks=[_create_early_stopping(**early_stopping_settings)],
+            callbacks=_create_training_callbacks(early_stopping_settings, reduce_lr_settings),
             verbose=0,
         )
 
         # Optuna minimiert dieselbe Validation-Metrik, die auch EarlyStopping beobachtet.
-        # Bei monitor="val_mae" wird also direkt die mittlere absolute Abweichung optimiert.
+        # Aktuell ist das val_loss, weil der Plot und die Bewertung daran ausgerichtet sind.
         validation_metric_name = early_stopping_settings["monitor"]
         best_validation_metric = min(history.history[validation_metric_name])
         trial.set_user_attr("trained_epochs", len(history.history["loss"]))
@@ -314,7 +355,7 @@ def _format_best_params(best_params):
     return "\n".join(lines)
 
 
-def train_model(data, n_trials=20):
+def train_model(data, n_trials=40):
     # Hauptfunktion: wird aus main.py aufgerufen und trainiert am Ende das Modell.
     # n_trials bestimmt, wie viele Modellvarianten Optuna testen soll.
     csv_path = Path(data)
@@ -336,13 +377,21 @@ def train_model(data, n_trials=20):
     validation_size = 0.2
     random_state = 42
     shuffle = True
-    epochs = 100
+    epochs = 250
     early_stopping_settings = {
-        "monitor": "val_mae",
+        "monitor": "val_loss",
         "mode": "min",
-        "patience": 5,
-        "min_delta": 0.0002,
+        "patience": 20,
+        "min_delta": 0.00005,
         "restore_best_weights": True,
+    }
+    reduce_lr_settings = {
+        "monitor": "val_loss",
+        "mode": "min",
+        "factor": 0.5,
+        "patience": 6,
+        "min_delta": 0.00005,
+        "min_lr": 1e-6,
     }
 
     # CSV-Datei aus main.py einlesen.
@@ -380,6 +429,7 @@ def train_model(data, n_trials=20):
         hidden_activation=hidden_activation,
         output_activation=output_activation,
         early_stopping_settings=early_stopping_settings,
+        reduce_lr_settings=reduce_lr_settings,
     )
 
     # Die besten gefundenen Parameter werden aus der Optuna-Study gelesen.
@@ -409,6 +459,7 @@ def train_model(data, n_trials=20):
 
     # Jetzt wird das finale Modell mit den besten Hyperparametern gebaut.
     _clear_keras_session()
+    _set_training_seed(random_state)
     mlp_model = build_mlp_model(
         input_dim=X_train.shape[1],
         hidden_units=hidden_units,
@@ -429,7 +480,7 @@ def train_model(data, n_trials=20):
         epochs=epochs,
         batch_size=batch_size,
         validation_data=(X_val, y_val),
-        callbacks=[_create_early_stopping(**early_stopping_settings)],
+        callbacks=_create_training_callbacks(early_stopping_settings, reduce_lr_settings),
         verbose=0,
     )
 
@@ -547,6 +598,13 @@ def train_model(data, n_trials=20):
         f"Patience: {early_stopping_settings['patience']}\n"
         f"Min Delta: {early_stopping_settings['min_delta']}\n"
         f"Restore Best Weights: {early_stopping_settings['restore_best_weights']}\n\n"
+        "Learning Rate Scheduling\n"
+        "------------------------\n"
+        f"Monitor: {reduce_lr_settings['monitor']}\n"
+        f"Factor: {reduce_lr_settings['factor']}\n"
+        f"Patience: {reduce_lr_settings['patience']}\n"
+        f"Min Delta: {reduce_lr_settings['min_delta']}\n"
+        f"Min LR: {reduce_lr_settings['min_lr']}\n\n"
         "Finale Ergebnisse\n"
         "-----------------\n"
         f"Final Training Loss: {train_loss:.4f}\n"

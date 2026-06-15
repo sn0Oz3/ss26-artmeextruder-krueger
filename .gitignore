@@ -92,6 +92,9 @@ models/*
 *.ckpt
 *.pb
 *.tflite
+!models/mlp_model.pkl
+!models/scalers.pkl
+!models/training_loss.png
 
 # Runtime output folders
 outputs/

@@ -10,7 +10,7 @@ Optuna
 Trials: 30
 Best Trial: 7
 Best Validation Loss: 0.0511
-Study gespeichert unter: C:\Users\simon\Desktop\Hochschule\KIDM\Git\ss26-artmeextruder-krueger\Models\optuna_study.pkl
+Study gespeichert unter: C:\Users\simon\Desktop\Hochschule\KIDM\Git\ss26-artmeextruder-krueger\models\optuna_study.pkl
 
 Modellarchitektur
 -----------------

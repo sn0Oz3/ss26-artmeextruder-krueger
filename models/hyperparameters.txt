@@ -2,46 +2,47 @@ Hyperparameter des MLP-Modells
 ==============================
 
 Datenquelle: C:\Users\simon\Desktop\Hochschule\KIDM\Git\ss26-artmeextruder-krueger\data\recording_2026-06-10_13-53-40_preprocessed.csv
-Feature-Spalten: Temp Act (C), Extruder RPM, Puller RPM, Sensor Pos
+Feature-Spalten: Diameter (mm), Diameter Delta 1, Diameter Delta 5, Diameter Slope 10, Temp Act (C), Extruder RPM, Puller RPM, Sensor Pos
 Ziel-Spalte: Diameter (mm)
+Ziel-Modus: delta (future diameter - letzter Eingabe-Durchmesser)
 
 Optuna
 ------
-Trials: 80
-Best Validation Loss: 0.1476
+Trials: 20
+Best Validation Metric (val_mae): 0.1376
 Study gespeichert unter: C:\Users\simon\Desktop\Hochschule\KIDM\Git\ss26-artmeextruder-krueger\models\optuna_study.pkl
 
 Beste Optuna-Parameter
 ----------------------
-hidden_layer_count: 1
-hidden_layer_1_units: 16
-dropout_rate: 0.4
-l2_rate: 4.3894499380657516e-05
-learning_rate: 0.00017306339860671002
+architecture: two_layer_16_8
+dropout_rate: 0.2
+l2_rate: 0.001
+learning_rate: 0.0003
 batch_size: 64
-sequence_length: 60
 
 Modellarchitektur
 -----------------
-Input Dimension: 240
-Original Feature Count: 4
+Input Dimension: 480
+Original Feature Count: 8
 Sequence Length: 60
-Sequenz-Ziel: vorherige 60 Zeilen -> naechster Durchmesser
-Hidden Layers: 1
-Hidden Layer Neuronen: [16]
+Prediction Horizon: 10 Zeilen
+Sequenz-Ziel: vorherige 60 Zeilen -> Delta zum Durchmesser in 10 Zeilen
+Architektur-Auswahl: two_layer_16_8
+Hidden Layers: 2
+Hidden Layer Neuronen: [16, 8]
 Hidden Activation: relu
 Output Activation: linear
-Dropout Rate: 0.4
-L2 Rate: 4.3894499380657516e-05
+Dropout Rate: 0.2
+L2 Rate: 0.001
 
 Training
 --------
 Optimizer: adam
-Learning Rate: 0.00017306339860671002
-Loss: mse
+Learning Rate: 0.0003
+Loss: huber
 Metrics: mae
 Epochs: 100
-Tatsaechlich trainierte Epochen: 18
+Tatsaechlich trainierte Epochen: 24
 Batch Size: 64
 Test Size: 0.2
 Validation Size vom Trainingsanteil: 0.2
@@ -50,21 +51,31 @@ Shuffle: True
 
 Early Stopping
 --------------
-Monitor: val_loss
+Monitor: val_mae
 Mode: min
 Patience: 5
-Min Delta: 0.0003
+Min Delta: 0.0002
 Restore Best Weights: True
 
 Finale Ergebnisse
 -----------------
-Final Training Loss: 0.0908
-Final Validation Loss: 0.2056
-Test MSE: 0.1990
-Test MAE: 0.3389
+Final Training Loss: 0.0277
+Final Validation Loss: 0.0380
+Test Loss: 0.0555
+Test MAE: 0.1789
+
+Baseline: letzter Durchmesser bleibt gleich
+------------------------------------------
+Baseline Training Loss: 0.0304
+Baseline Validation Loss: 0.0348
+Baseline Test Loss: 0.0616
+Baseline Test MAE: 0.2033
 
 Rueckskalierte Fehler in mm
 --------------------------
-Final Training MAE: 0.0151 mm
-Final Validation MAE: 0.0237 mm
-Test MAE: 0.0238 mm
+Final Training MAE: 0.0085 mm
+Final Validation MAE: 0.0101 mm
+Test MAE: 0.0126 mm
+Baseline Training MAE: 0.0104 mm
+Baseline Validation MAE: 0.0112 mm
+Baseline Test MAE: 0.0143 mm

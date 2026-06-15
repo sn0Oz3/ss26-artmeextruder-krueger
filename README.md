@@ -1,79 +1,21 @@
-# Projekttitel
+# artme-Filamentextruder
 
 ## Beschreibung
 
-Beschreiben Sie Ihr Projekt kurz und präzise:
+Ziel dieses Projekts ist die datenbasierte Vorhersage des Filamentdurchmessers eines Artme-Extruders mithilfe von Künstlicher Intelligenz. Dadurch soll der Key-Performance-Indikator Qualitaet verbessert werden, indem mehr Filament mit dem gewuenschten Durchmesser produziert und gleichzeitig weniger Ausschuss erzeugt wird. Im Extrusionsprozess ist ein moeglichst konstanter Durchmesser wichtig, da Abweichungen die Qualitaet des gedruckten oder weiterverarbeiteten Materials beeinflussen koennen. Das Projekt untersucht daher, ob aus Prozessdaten wie Temperatur, Extruder-Drehzahl, Puller-Drehzahl, Sensorposition und bisherigen Durchmesserwerten eine Vorhersage des zukuenftigen Durchmessers moeglich ist.
 
-- Welches Problem wird mit Ihrem Projekt gelöst?
-- Welchen praktischen Anwendungsfall hat das Projekt im Kontext von **Künstliche Intelligenz und Digitalisierung im Maschinenbau**?
-- Welche Daten werden verwendet?
-- Welche KI- oder Machine-Learning-Methode wird eingesetzt?
-- Welches Ergebnis wird erwartet?
+Im Kontext von Kuenstliche Intelligenz und Digitalisierung im Maschinenbau zeigt das Projekt, wie Messdaten aus einem technischen Prozess genutzt werden koennen, um Prozessverhalten zu analysieren und Qualitaetsabweichungen fruehzeitig zu erkennen. Eine solche Vorhersage kann perspektivisch dabei helfen, Regelungsstrategien zu verbessern oder Bedienpersonen rechtzeitig auf unguenstige Prozessentwicklungen hinzuweisen.
 
-Beispielhafte Fragestellung:
+Als Datengrundlage werden aufgezeichnete CSV-Dateien des Extrusionsprozesses verwendet. Diese enthalten unter anderem den gemessenen Filamentdurchmesser, die aktuelle Temperatur, die Extruder-Drehzahl, die Puller-Drehzahl und die Sensorposition. Die Daten werden zunaechst vorverarbeitet und um zusaetzliche Trend-Features ergaenzt, zum Beispiel kurzfristige Aenderungen und Steigungen des Durchmessers.
 
-> Ziel des Projekts ist es, mithilfe von Methoden der Künstlichen Intelligenz einen technischen oder industriellen Prozess zu analysieren, zu bewerten oder vorherzusagen. Das Projekt soll zeigen, wie datenbasierte Verfahren im Maschinenbau sinnvoll eingesetzt werden können.
+Fuer die Vorhersage wird ein Multi-Layer-Perceptron eingesetzt. Das Modell betrachtet Sequenzen vergangener Messwerte und sagt die Aenderung des Durchmessers mehrere Zeilen in die Zukunft voraus. Die Hyperparameter des neuronalen Netzes werden mithilfe von Optuna optimiert. Anschliessend werden das trainierte Modell, die verwendeten Scaler, die Trainingshistorie und ein Plot des Training- und Validation-Loss gespeichert.
 
-## Setup
+Erwartet wird ein Modell, das den zukuenftigen Filamentdurchmesser zuverlaessiger abschaetzt als eine einfache Baseline, bei der angenommen wird, dass der Durchmesser unveraendert bleibt. Im aktuellen Trainingslauf erreicht das Modell einen Test-MAE von etwa `0.0124 mm` und liegt damit unter der Baseline von etwa `0.0143 mm`.
 
-Erstellen und aktivieren Sie zunächst eine virtuelle Python-Umgebung. Installieren Sie anschließend alle benötigten Abhängigkeiten:
+<p align="center">
+  <img src="models/training_loss.png" alt="Training Loss" width="720">
+</p>
 
-```bash
-python -m venv .venv
-source .venv/bin/activate  # macOS/Linux
-# .venv\Scripts\activate   # Windows
+## Autor
 
-pip install -r requirements.txt
-```
-
-## Verwendung
-
-Starten Sie das Projekt mit:
-
-```bash
-python src/main.py
-```
-
-Beschreiben Sie kurz:
-
-- Welche Eingabedaten verwendet werden
-- Wie die Daten eingelesen oder vorbereitet werden
-- Welches Modell oder Verfahren verwendet wird
-- Welche Ausgabe erzeugt wird
-- Wie die Ergebnisse interpretiert werden können
-
-Beispiel:
-
-> Das Programm liest einen Datensatz ein, bereitet die Daten vor, trainiert ein Machine-Learning-Modell und gibt anschließend Kennzahlen zur Modellgüte sowie eine beispielhafte Vorhersage aus.
-
-## Projektstruktur
-
-Empfohlene Struktur des Repositories:
-
-```text
-.
-├── README.md
-├── .gitignore
-├── requirements.txt
-├── data/
-│   └── ...
-└── src/
-    ├── main.py
-    ├── data_preprocessing.py
-    ├── model.py
-    └── evaluation.py
-```
-
-## Anforderungen
-
-- Python >= 3.10
-- Alle benötigten Bibliotheken sind in `requirements.txt` aufgeführt
-- Das Projekt muss auf einem anderen System reproduzierbar sein
-- Die Datenquelle muss dokumentiert werden
-- Der Code muss nachvollziehbar strukturiert und kommentiert sein
-- Es muss eine sinnvolle `.gitignore`-Datei verwendet werden, damit z. B. virtuelle Umgebungen, Cache-Dateien und Systemdateien nicht committet werden.
-
-## Autoren
-
-- Name Nachname
-- Name Nachname
+- Simon Krüger

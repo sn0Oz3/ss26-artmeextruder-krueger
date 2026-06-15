@@ -10,7 +10,7 @@ Als Datengrundlage werden aufgezeichnete CSV-Dateien des Extrusionsprozesses ver
 
 Fuer die Vorhersage wird ein Multi-Layer-Perceptron eingesetzt. Das Modell betrachtet Sequenzen vergangener Messwerte und sagt die Aenderung des Durchmessers mehrere Zeilen in die Zukunft voraus. Die Hyperparameter des neuronalen Netzes werden mithilfe von Optuna optimiert. Anschliessend werden das trainierte Modell, die verwendeten Scaler, die Trainingshistorie und ein Plot des Training- und Validation-Loss gespeichert.
 
-Erwartet wird ein Modell, das den zukuenftigen Filamentdurchmesser zuverlaessiger abschaetzt als eine einfache Mittelwert-Baseline. Im aktuellen Trainingslauf erreicht das Modell einen Test-MAE von etwa `0.0110 mm` und liegt damit unter der Baseline von etwa `0.0567 mm`.
+Im aktuellen Branch wird ein MLP-Modell verwendet, das aus den vier Prozessgroessen Temperatur, Extruder-Drehzahl, Puller-Drehzahl und Sensorposition den Filamentdurchmesser abschaetzt. Der aktuelle Trainingslauf erreicht einen finalen Validation Loss von `0.0554`, einen Test-MSE von `0.0583` und einen Test-MAE von `0.1570` im skalierten Zielraum. Rueckgerechnet entspricht das einem mittleren absoluten Fehler von etwa `0.0110 mm`.
 
 <p align="center">
   <img src="models/training_loss.png" alt="Training Loss" width="720">

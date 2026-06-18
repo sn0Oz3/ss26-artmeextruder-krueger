@@ -4,11 +4,20 @@ from pathlib import Path
 
 import numpy as np
 
+from feature_engineering import (
+    DIAMETER_COLUMN,
+    MODEL_FEATURE_COLUMNS,
+    RAW_FEATURE_COLUMNS,
+    add_diameter_trend_features,
+)
+
 _MODEL_CACHE = None
 _TEST_MAE_CACHE = None
 _TEST_MAE_LOADED = False
-DEFAULT_FEATURE_COLUMNS = ['Temp Act (C)', 'Extruder RPM', 'Puller RPM', 'Sensor Pos']
+DEFAULT_RAW_FEATURE_COLUMNS = RAW_FEATURE_COLUMNS
+DEFAULT_FEATURE_COLUMNS = MODEL_FEATURE_COLUMNS
 DEFAULT_SEQUENCE_LENGTH = 60
+DEFAULT_PREDICTION_HORIZON = 10
 
 
 def _load_prediction_artifacts():
@@ -64,12 +73,20 @@ def get_test_mae_mm():
 
 def _prepare_sequence_input(last_rows, feature_columns, sequence_length):
     if hasattr(last_rows, "columns"):
-        missing_columns = [column for column in feature_columns if column not in last_rows.columns]
+        prepared_rows = last_rows
+        if DIAMETER_COLUMN in prepared_rows.columns:
+            prepared_rows = add_diameter_trend_features(prepared_rows, DIAMETER_COLUMN)
+
+        missing_columns = [column for column in feature_columns if column not in prepared_rows.columns]
         if missing_columns:
             raise ValueError(f"Folgende Feature-Spalten fehlen: {', '.join(missing_columns)}")
-        input_values = last_rows[feature_columns].to_numpy()
+        input_values = prepared_rows[feature_columns].to_numpy()
     else:
         input_values = np.asarray(last_rows, dtype=float)
+        expected_raw_shape = (sequence_length, len(DEFAULT_RAW_FEATURE_COLUMNS))
+        expected_model_shape = (sequence_length, len(feature_columns))
+        if input_values.shape == expected_raw_shape and expected_model_shape != expected_raw_shape:
+            input_values = _add_diameter_trend_features_to_array(input_values)
 
     expected_shape = (sequence_length, len(feature_columns))
     if input_values.shape != expected_shape:
@@ -81,15 +98,47 @@ def _prepare_sequence_input(last_rows, feature_columns, sequence_length):
     return input_values
 
 
-# This function predicts the next filament diameter from the previous rows.
+def _add_diameter_trend_features_to_array(raw_values):
+    # Array-Variante fuer die Live-GUI: Aus den 5 Rohwerten pro Zeile werden
+    # dieselben 7 Modellfeatures gebaut wie beim Training.
+    diameter = raw_values[:, 0].astype(float)
+    delta_5 = np.zeros_like(diameter)
+    delta_5[5:] = diameter[5:] - diameter[:-5]
+    slope_10 = np.zeros_like(diameter)
+    slope_10[10:] = (diameter[10:] - diameter[:-10]) / 10.0
+
+    return np.column_stack(
+        [
+            diameter,
+            delta_5,
+            slope_10,
+            raw_values[:, 1],
+            raw_values[:, 2],
+            raw_values[:, 3],
+            raw_values[:, 4],
+        ]
+    )
+
+
+# Diese Funktion sagt den Durchmesser mehrere Zeilen in die Zukunft voraus.
+# Der genaue Abstand wird im Training gespeichert, standardmaessig sind es 10 Zeilen.
 def predict_diameter(last_rows):
     model, scalers = _load_prediction_artifacts()
 
     feature_scaler = scalers["feature_scaler"]
     diameter_scaler = scalers["diameter_scaler"]
     feature_columns = scalers.get("feature_columns", DEFAULT_FEATURE_COLUMNS)
+    target_column = scalers.get("target_column", DIAMETER_COLUMN)
+    target_mode = scalers.get("target_mode", "diameter")
     sequence_length = scalers.get("sequence_length", DEFAULT_SEQUENCE_LENGTH)
+    prediction_horizon = scalers.get("prediction_horizon", DEFAULT_PREDICTION_HORIZON)
+    if prediction_horizon < 1:
+        raise ValueError("prediction_horizon muss mindestens 1 sein.")
+    if target_mode not in {"diameter", "delta"}:
+        raise ValueError("target_mode muss 'diameter' oder 'delta' sein.")
 
+    # last_rows muss die letzten sequence_length Messzeilen enthalten.
+    # Jede Zeile enthaelt den gemessenen Durchmesser plus die Prozess-Features.
     input_values = _prepare_sequence_input(last_rows, feature_columns, sequence_length)
     input_scaled = feature_scaler.transform(input_values)
     input_scaled = input_scaled.flatten().reshape(1, -1)
@@ -98,6 +147,16 @@ def predict_diameter(last_rows):
         prediction_scaled = model.predict(input_scaled, verbose=0)
     except TypeError:
         prediction_scaled = model.predict(input_scaled)
+
+    if target_mode == "delta":
+        # Das Modell sagt die Aenderung im skalierten Durchmesserraum voraus.
+        # Fuer den absoluten Durchmesser addieren wir diese Aenderung zum letzten
+        # gemessenen Durchmesser aus der Eingabesequenz.
+        diameter_column_index = feature_columns.index(target_column)
+        last_diameter_mm = float(input_values[-1][diameter_column_index])
+        prediction_delta_mm = float(prediction_scaled[0][0]) * float(diameter_scaler.scale_[0])
+        return last_diameter_mm + prediction_delta_mm
+
     prediction_mm = diameter_scaler.inverse_transform(prediction_scaled)
 
     return float(prediction_mm[0][0])
@@ -105,12 +164,12 @@ def predict_diameter(last_rows):
 
 # Hier wird die Funktion mit Beispielwerten aufgerufen, um den vorhergesagten Durchmesser zu berechnen und auszugeben.
 if __name__ == "__main__":
-    example_row = [187.9, 12.0, 23.56, 6.62]
+    example_row = [1.69, 187.9, 12.0, 23.56, 6.62]
     example_rows = np.tile(example_row, (DEFAULT_SEQUENCE_LENGTH, 1))
     diameter = predict_diameter(example_rows)
     test_mae_mm = get_test_mae_mm()
 
-    print(f"Vorhergesagter Durchmesser: {diameter:.3f} mm")
+    print(f"Vorhergesagter Durchmesser in {DEFAULT_PREDICTION_HORIZON} Zeilen: {diameter:.3f} mm")
     if test_mae_mm is not None:
         print(f"Rueckskalierter Test MAE: +/- {test_mae_mm:.3f} mm")
 

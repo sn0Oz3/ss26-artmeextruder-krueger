@@ -1,10 +1,24 @@
 import pickle
+import random
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+
+from feature_engineering import DIAMETER_COLUMN, MODEL_FEATURE_COLUMNS, add_diameter_trend_features
+
+
+MODEL_ARCHITECTURES = {
+    # Optuna vergleicht bewusst kleine Netze mit unterschiedlicher Tiefe.
+    # Weniger Neuronen begrenzen die Modellkapazitaet und reduzieren Overfitting.
+    # Die Namen landen auch in hyperparameters.txt und machen den Optuna-Lauf lesbarer.
+    "small_16": [16],
+    "small_16_8": [16, 8],
+    "medium_32_16_8": [32, 16, 8],
+}
+FIXED_SEQUENCE_LENGTH = 60
 
 
 def _keras_import_error(exc):
@@ -49,6 +63,32 @@ def _create_early_stopping(
     )
 
 
+def _create_reduce_lr_on_plateau(monitor, mode, factor, patience, min_delta, min_lr):
+    # Wenn die Validation Loss stagniert, wird die Lernrate reduziert.
+    # Dadurch kann das Modell nach einer groben Anfangsphase feiner nachoptimieren.
+    try:
+        from keras.callbacks import ReduceLROnPlateau
+    except ImportError as exc:
+        _keras_import_error(exc)
+
+    return ReduceLROnPlateau(
+        monitor=monitor,
+        mode=mode,
+        factor=factor,
+        patience=patience,
+        min_delta=min_delta,
+        min_lr=min_lr,
+        verbose=0,
+    )
+
+
+def _create_training_callbacks(early_stopping_settings, reduce_lr_settings):
+    return [
+        _create_reduce_lr_on_plateau(**reduce_lr_settings),
+        _create_early_stopping(**early_stopping_settings),
+    ]
+
+
 def _clear_keras_session():
     # Bei der Optuna-Suche werden viele Modelle nacheinander gebaut.
     # clear_session raeumt alte Keras-Modelle aus dem Speicher.
@@ -58,6 +98,31 @@ def _clear_keras_session():
         backend.clear_session()
     except ImportError:
         pass
+
+
+def _set_training_seed(random_state):
+    random.seed(random_state)
+    np.random.seed(random_state)
+    try:
+        import tensorflow as tf
+
+        tf.keras.utils.set_random_seed(random_state)
+    except ImportError:
+        pass
+
+
+def _calculate_baseline_loss(delta_targets, loss):
+    # Die Baseline sagt immer 0 Delta voraus. Dadurch ist der Fehler genau
+    # das tatsaechliche Delta. Der Loss wird passend zur Modell-Compile-Einstellung berechnet.
+    errors = np.asarray(delta_targets, dtype=float)
+    if loss == "huber":
+        abs_errors = np.abs(errors)
+        return float(np.mean(np.where(abs_errors <= 1.0, 0.5 * errors ** 2, abs_errors - 0.5)))
+    if loss == "mae":
+        return float(np.mean(np.abs(errors)))
+    if loss == "mse":
+        return float(np.mean(np.square(errors)))
+    return float(np.mean(np.square(errors)))
 
 
 def build_mlp_model(
@@ -113,45 +178,60 @@ def build_mlp_model(
     return model
 
 
-def create_sequences(features, targets, sequence_length):
+def create_sequences(features, targets, sequence_length, prediction_horizon=1, target_mode="diameter"):
     # Aus einzelnen Messzeilen werden Sequenzen gebaut.
-    # Beispiel bei sequence_length=60:
-    # Zeilen 0-59 werden zum Input, der Durchmesser aus Zeile 60 ist das Ziel.
-    if len(features) <= sequence_length:
+    # prediction_horizon legt fest, wie weit in die Zukunft vorhergesagt wird.
+    # Beispiel bei sequence_length=60 und prediction_horizon=10:
+    # Zeilen 0-59 werden zum Input, Zeile 69 ist der Ziel-Zeitpunkt.
+    # Bei target_mode="delta" lernt das Modell nur die Aenderung:
+    # Durchmesser Zeile 69 minus Durchmesser Zeile 59.
+    if target_mode not in {"diameter", "delta"}:
+        raise ValueError("target_mode muss 'diameter' oder 'delta' sein.")
+
+    minimum_rows = sequence_length + prediction_horizon
+    if len(features) < minimum_rows:
         raise ValueError(
-            f"Mindestens {sequence_length + 1} Datenzeilen werden benoetigt, "
-            "um aus den vorherigen Zeilen den naechsten Durchmesser zu lernen."
+            f"Mindestens {minimum_rows} Datenzeilen werden benoetigt, "
+            "um aus den vorherigen Zeilen den zukuenftigen Durchmesser zu lernen."
         )
 
     sequence_features = []
     sequence_targets = []
 
-    for row_index in range(sequence_length, len(features)):
+    for row_index in range(sequence_length, len(features) - prediction_horizon + 1):
         previous_rows = features[row_index - sequence_length:row_index]
-        # Ein MLP erwartet einen flachen Vektor. Deshalb wird aus (60, 4) ein Vektor mit 240 Werten.
+        target_index = row_index + prediction_horizon - 1
+        last_input_index = row_index - 1
+        # Ein MLP erwartet einen flachen Vektor. Deshalb wird z.B. aus (60, 5)
+        # ein Vektor mit 300 Werten.
         sequence_features.append(previous_rows.flatten())
-        sequence_targets.append(targets[row_index])
+        if target_mode == "delta":
+            sequence_targets.append(targets[target_index] - targets[last_input_index])
+        else:
+            sequence_targets.append(targets[target_index])
 
     return np.array(sequence_features), np.array(sequence_targets)
 
 
 def _suggest_hyperparameters(trial):
-    # Optuna bekommt hier den Suchraum: Es darf z.B. Anzahl Layer,
-    # Neuronen, Dropout, L2-Regularisierung, Lernrate, Batch Size
-    # und Sequenzlaenge ausprobieren.
-    hidden_layer_count = trial.suggest_int("hidden_layer_count", 1, 4)
-    hidden_units = [
-        trial.suggest_categorical(f"hidden_layer_{i + 1}_units", [8, 16, 32, 64])
-        for i in range(hidden_layer_count)
-    ]
+    # Bewusst kleiner Suchraum: wenige plausible Varianten sind schneller,
+    # besser nachvollziehbar und verringern die Gefahr, dass Optuna zufaellige
+    # Besonderheiten des Validation-Splits "optimiert".
+    architecture = trial.suggest_categorical(
+        "architecture",
+        list(MODEL_ARCHITECTURES.keys()),
+    )
 
     return {
-        "hidden_units": hidden_units,
-        "dropout_rate": trial.suggest_float("dropout_rate", 0.15, 0.5, step=0.05),
-        "l2_rate": trial.suggest_float("l2_rate", 1e-5, 1e-2, log=True),
-        "learning_rate": trial.suggest_float("learning_rate", 1e-4, 2e-3, log=True),
+        "architecture": architecture,
+        "hidden_units": MODEL_ARCHITECTURES[architecture],
+        "dropout_rate": trial.suggest_categorical("dropout_rate", [0.15, 0.25, 0.35, 0.5]),
+        "l2_rate": trial.suggest_categorical("l2_rate", [1e-4, 5e-4, 1e-3]),
+        "learning_rate": trial.suggest_categorical("learning_rate", [1e-4, 3e-4, 1e-3]),
         "batch_size": trial.suggest_categorical("batch_size", [16, 32, 64]),
-        "sequence_length": trial.suggest_categorical("sequence_length", [40, 60]),
+        # Die Sequenzlaenge bleibt fest, damit Training, gespeichertes Modell
+        # und GUI immer dieselbe Anzahl vorheriger Messzeilen verwenden.
+        "sequence_length": FIXED_SEQUENCE_LENGTH,
     }
 
 
@@ -179,6 +259,8 @@ def _split_sequence_data(sequence_features, sequence_targets, test_size, validat
 def _optimize_hyperparameters(
     feature_array_scaled,
     diameter_array_scaled,
+    prediction_horizon,
+    target_mode,
     random_state,
     n_trials,
     test_size,
@@ -189,6 +271,7 @@ def _optimize_hyperparameters(
     hidden_activation,
     output_activation,
     early_stopping_settings,
+    reduce_lr_settings,
 ):
     # Diese Funktion fuehrt die Optuna-Suche aus.
     # Jeder Trial ist ein kompletter Testlauf mit einer anderen Modellarchitektur.
@@ -204,12 +287,14 @@ def _optimize_hyperparameters(
         # Ein Trial fragt zuerst neue Hyperparameter aus dem Suchraum ab.
         params = _suggest_hyperparameters(trial)
 
-        # Weil auch die sequence_length gesucht wird, muessen die Trainingssequenzen
-        # fuer jeden Trial neu erstellt werden.
+        # Die Trainingssequenzen werden hier im Delta-Modus erstellt:
+        # Ziel ist die zukuenftige Aenderung relativ zum letzten Eingabedurchmesser.
         sequence_features, sequence_targets = create_sequences(
             feature_array_scaled,
             diameter_array_scaled,
             params["sequence_length"],
+            prediction_horizon,
+            target_mode,
         )
         X_train, X_val, _, y_train, y_val, _ = _split_sequence_data(
             sequence_features,
@@ -220,6 +305,7 @@ def _optimize_hyperparameters(
 
         # Fuer jeden Trial wird ein frisches Modell gebaut und trainiert.
         _clear_keras_session()
+        _set_training_seed(random_state + trial.number)
         model = build_mlp_model(
             input_dim=X_train.shape[1],
             hidden_units=params["hidden_units"],
@@ -238,17 +324,19 @@ def _optimize_hyperparameters(
             epochs=epochs,
             batch_size=params["batch_size"],
             validation_data=(X_val, y_val),
-            callbacks=[_create_early_stopping(**early_stopping_settings)],
+            callbacks=_create_training_callbacks(early_stopping_settings, reduce_lr_settings),
             verbose=0,
         )
 
-        # Optuna minimiert diesen Wert. Je kleiner die beste Validation Loss,
-        # desto besser war dieser Trial.
-        best_validation_loss = min(history.history["val_loss"])
+        # Optuna minimiert dieselbe Validation-Metrik, die auch EarlyStopping beobachtet.
+        # Aktuell ist das val_loss, weil der Plot und die Bewertung daran ausgerichtet sind.
+        validation_metric_name = early_stopping_settings["monitor"]
+        best_validation_metric = min(history.history[validation_metric_name])
         trial.set_user_attr("trained_epochs", len(history.history["loss"]))
         trial.set_user_attr("input_dim", X_train.shape[1])
+        trial.set_user_attr("optimized_metric", validation_metric_name)
         _clear_keras_session()
-        return best_validation_loss
+        return best_validation_metric
 
     # TPESampler ist Optunas Standard-Strategie fuer eine intelligente Suche.
     # Der Seed macht die Suche besser reproduzierbar.
@@ -267,18 +355,23 @@ def _format_best_params(best_params):
     return "\n".join(lines)
 
 
-def train_model(data, n_trials=80):
+def train_model(data, n_trials=40):
     # Hauptfunktion: wird aus main.py aufgerufen und trainiert am Ende das Modell.
     # n_trials bestimmt, wie viele Modellvarianten Optuna testen soll.
     csv_path = Path(data)
 
-    feature_columns = ['Temp Act (C)', 'Extruder RPM', 'Puller RPM', 'Sensor Pos']
-    target_column = 'Diameter (mm)'
+    target_column = DIAMETER_COLUMN
+    prediction_horizon = 10
+    target_mode = "delta"
+    # Der bisher gemessene Durchmesser wird als Eingabe-Feature mitgegeben.
+    # Zusaetzliche Trend-Features zeigen dem Modell, ob der Durchmesser gerade steigt oder faellt.
+    # Gelernt wird nicht der absolute Zukunftswert, sondern dessen Delta zum letzten Messwert.
+    feature_columns = MODEL_FEATURE_COLUMNS
 
     hidden_activation = "relu"
     output_activation = "linear"
     optimizer_name = "adam"
-    loss = "mse"
+    loss = "huber"
     metrics = ["mae"]
     test_size = 0.2
     validation_size = 0.2
@@ -288,18 +381,27 @@ def train_model(data, n_trials=80):
     early_stopping_settings = {
         "monitor": "val_loss",
         "mode": "min",
-        "patience": 5,
-        "min_delta": 0.0003,
+        "patience": 7,
+        "min_delta": 0.00005,
         "restore_best_weights": True,
+    }
+    reduce_lr_settings = {
+        "monitor": "val_loss",
+        "mode": "min",
+        "factor": 0.5,
+        "patience": 3,
+        "min_delta": 0.00005,
+        "min_lr": 1e-6,
     }
 
     # CSV-Datei aus main.py einlesen.
     csv_df = pd.read_csv(csv_path)
+    csv_df = add_diameter_trend_features(csv_df, target_column)
 
     # Features sind die Eingabewerte fuer das Modell.
     feature_array = csv_df[feature_columns].to_numpy()
 
-    # Target ist der Wert, den das Modell vorhersagen soll.
+    # Aus dem Durchmesser wird spaeter das Delta-Ziel gebildet.
     diameter_array = csv_df[[target_column]].to_numpy()
 
     # Scaler -> StandardScaler, da die Features sehr unterschiedliche Wertebereiche haben.
@@ -315,6 +417,8 @@ def train_model(data, n_trials=80):
     study = _optimize_hyperparameters(
         feature_array_scaled=feature_array_scaled,
         diameter_array_scaled=diameter_array_scaled,
+        prediction_horizon=prediction_horizon,
+        target_mode=target_mode,
         random_state=random_state,
         n_trials=n_trials,
         test_size=test_size,
@@ -325,26 +429,26 @@ def train_model(data, n_trials=80):
         hidden_activation=hidden_activation,
         output_activation=output_activation,
         early_stopping_settings=early_stopping_settings,
+        reduce_lr_settings=reduce_lr_settings,
     )
 
     # Die besten gefundenen Parameter werden aus der Optuna-Study gelesen.
     best_params = study.best_params
-    hidden_layer_count = best_params["hidden_layer_count"]
-    hidden_units = [
-        best_params[f"hidden_layer_{i + 1}_units"]
-        for i in range(hidden_layer_count)
-    ]
+    architecture = best_params["architecture"]
+    hidden_units = MODEL_ARCHITECTURES[architecture]
     dropout_rate = best_params["dropout_rate"]
     l2_rate = best_params["l2_rate"]
     optimizer_learning_rate = best_params["learning_rate"]
     batch_size = best_params["batch_size"]
-    sequence_length = best_params["sequence_length"]
+    sequence_length = FIXED_SEQUENCE_LENGTH
 
     # Mit der besten sequence_length werden die finalen Sequenzen gebaut.
     sequence_features, sequence_targets = create_sequences(
         feature_array_scaled,
         diameter_array_scaled,
         sequence_length,
+        prediction_horizon,
+        target_mode,
     )
     X_train, X_val, X_test, y_train, y_val, y_test = _split_sequence_data(
         sequence_features,
@@ -355,6 +459,8 @@ def train_model(data, n_trials=80):
 
     # Jetzt wird das finale Modell mit den besten Hyperparametern gebaut.
     _clear_keras_session()
+    final_training_seed = random_state + study.best_trial.number
+    _set_training_seed(final_training_seed)
     mlp_model = build_mlp_model(
         input_dim=X_train.shape[1],
         hidden_units=hidden_units,
@@ -375,7 +481,7 @@ def train_model(data, n_trials=80):
         epochs=epochs,
         batch_size=batch_size,
         validation_data=(X_val, y_val),
-        callbacks=[_create_early_stopping(**early_stopping_settings)],
+        callbacks=_create_training_callbacks(early_stopping_settings, reduce_lr_settings),
         verbose=0,
     )
 
@@ -385,12 +491,25 @@ def train_model(data, n_trials=80):
     validation_loss, validation_mae = mlp_model.evaluate(X_val, y_val, verbose=0)
     test_loss, test_mae = mlp_model.evaluate(X_test, y_test, verbose=0)
 
-    # MAE liegt nach dem Training im skalierten Durchmesserraum.
-    # Multiplikation mit scale_[0] macht daraus wieder Millimeter.
+    # Baseline fuer die Delta-Vorhersage:
+    # Wenn das Modell 0 Delta vorhersagt, bleibt der Durchmesser auf dem letzten
+    # gemessenen Wert. Das ist die faire Vergleichslinie fuer diesen Zeitreihenfall.
+    baseline_train_loss = _calculate_baseline_loss(y_train, loss)
+    baseline_validation_loss = _calculate_baseline_loss(y_val, loss)
+    baseline_test_loss = _calculate_baseline_loss(y_test, loss)
+    baseline_train_mae = float(np.mean(np.abs(y_train)))
+    baseline_validation_mae = float(np.mean(np.abs(y_val)))
+    baseline_test_mae = float(np.mean(np.abs(y_test)))
+
+    # Bei target_mode="delta" liegt der MAE im skalierten Delta-Raum.
+    # Die Standardabweichung des Durchmessers macht daraus wieder Millimeter.
     diameter_scale_mm = scaler_diameter.scale_[0]
     final_training_mae_mm = train_mae * diameter_scale_mm
     final_validation_mae_mm = validation_mae * diameter_scale_mm
     test_mae_mm = test_mae * diameter_scale_mm
+    baseline_train_mae_mm = baseline_train_mae * diameter_scale_mm
+    baseline_validation_mae_mm = baseline_validation_mae * diameter_scale_mm
+    baseline_test_mae_mm = baseline_test_mae * diameter_scale_mm
 
     models_dir = Path(__file__).resolve().parent.parent / "models"
     models_dir.mkdir(exist_ok=True)
@@ -413,8 +532,11 @@ def train_model(data, n_trials=80):
                 "diameter_scaler": scaler_diameter,
                 "feature_columns": feature_columns,
                 "target_column": target_column,
+                "target_mode": target_mode,
                 "sequence_length": sequence_length,
+                "prediction_horizon": prediction_horizon,
                 "test_mae_mm": test_mae_mm,
+                "baseline_test_mae_mm": baseline_test_mae_mm,
             },
             scaler_file,
         )
@@ -432,11 +554,14 @@ def train_model(data, n_trials=80):
         "==============================\n\n"
         f"Datenquelle: {csv_path}\n"
         f"Feature-Spalten: {', '.join(feature_columns)}\n"
-        f"Ziel-Spalte: {target_column}\n\n"
+        f"Ziel-Spalte: {target_column}\n"
+        f"Ziel-Modus: {target_mode} "
+        "(future diameter - letzter Eingabe-Durchmesser)\n\n"
         "Optuna\n"
         "------\n"
         f"Trials: {n_trials}\n"
-        f"Best Validation Loss: {study.best_value:.4f}\n"
+        f"Best Trial: {study.best_trial.number}\n"
+        f"Best Validation Metric ({early_stopping_settings['monitor']}): {study.best_value:.4f}\n"
         f"Study gespeichert unter: {optuna_study_path}\n\n"
         "Beste Optuna-Parameter\n"
         "----------------------\n"
@@ -446,7 +571,9 @@ def train_model(data, n_trials=80):
         f"Input Dimension: {X_train.shape[1]}\n"
         f"Original Feature Count: {len(feature_columns)}\n"
         f"Sequence Length: {sequence_length}\n"
-        f"Sequenz-Ziel: vorherige {sequence_length} Zeilen -> naechster Durchmesser\n"
+        f"Prediction Horizon: {prediction_horizon} Zeilen\n"
+        f"Sequenz-Ziel: vorherige {sequence_length} Zeilen -> Delta zum Durchmesser in {prediction_horizon} Zeilen\n"
+        f"Architektur-Auswahl: {architecture}\n"
         f"Hidden Layers: {len(hidden_units)}\n"
         f"Hidden Layer Neuronen: {hidden_units}\n"
         f"Hidden Activation: {hidden_activation}\n"
@@ -465,6 +592,7 @@ def train_model(data, n_trials=80):
         f"Test Size: {test_size}\n"
         f"Validation Size vom Trainingsanteil: {validation_size}\n"
         f"Random State: {random_state}\n"
+        f"Final Training Seed: {final_training_seed}\n"
         f"Shuffle: {shuffle}\n\n"
         "Early Stopping\n"
         "--------------\n"
@@ -473,17 +601,33 @@ def train_model(data, n_trials=80):
         f"Patience: {early_stopping_settings['patience']}\n"
         f"Min Delta: {early_stopping_settings['min_delta']}\n"
         f"Restore Best Weights: {early_stopping_settings['restore_best_weights']}\n\n"
+        "Learning Rate Scheduling\n"
+        "------------------------\n"
+        f"Monitor: {reduce_lr_settings['monitor']}\n"
+        f"Factor: {reduce_lr_settings['factor']}\n"
+        f"Patience: {reduce_lr_settings['patience']}\n"
+        f"Min Delta: {reduce_lr_settings['min_delta']}\n"
+        f"Min LR: {reduce_lr_settings['min_lr']}\n\n"
         "Finale Ergebnisse\n"
         "-----------------\n"
         f"Final Training Loss: {train_loss:.4f}\n"
         f"Final Validation Loss: {validation_loss:.4f}\n"
-        f"Test MSE: {test_loss:.4f}\n"
+        f"Test Loss: {test_loss:.4f}\n"
         f"Test MAE: {test_mae:.4f}\n\n"
+        "Baseline: letzter Durchmesser bleibt gleich\n"
+        "------------------------------------------\n"
+        f"Baseline Training Loss: {baseline_train_loss:.4f}\n"
+        f"Baseline Validation Loss: {baseline_validation_loss:.4f}\n"
+        f"Baseline Test Loss: {baseline_test_loss:.4f}\n"
+        f"Baseline Test MAE: {baseline_test_mae:.4f}\n\n"
         "Rueckskalierte Fehler in mm\n"
         "--------------------------\n"
         f"Final Training MAE: {final_training_mae_mm:.4f} mm\n"
         f"Final Validation MAE: {final_validation_mae_mm:.4f} mm\n"
         f"Test MAE: {test_mae_mm:.4f} mm\n"
+        f"Baseline Training MAE: {baseline_train_mae_mm:.4f} mm\n"
+        f"Baseline Validation MAE: {baseline_validation_mae_mm:.4f} mm\n"
+        f"Baseline Test MAE: {baseline_test_mae_mm:.4f} mm\n"
     )
     hyperparameter_path.write_text(hyperparameter_text, encoding="utf-8")
 
@@ -494,15 +638,19 @@ def train_model(data, n_trials=80):
         f"and diameter array shape {diameter_array_scaled.shape}"
         f", sequence shape {sequence_features.shape}/{sequence_targets.shape}"
         f", sequence length {sequence_length}"
+        f", prediction horizon {prediction_horizon}"
         f", train/validation/test shape "
         f"{X_train.shape}/{y_train.shape}, {X_val.shape}/{y_val.shape}, {X_test.shape}/{y_test.shape}"
         f", optuna trials {n_trials}"
-        f", best optuna validation loss {study.best_value:.4f}"
+        f", best trial {study.best_trial.number}"
+        f", final training seed {final_training_seed}"
+        f", best optuna {early_stopping_settings['monitor']} {study.best_value:.4f}"
         f", trained epochs {len(history.history['loss'])}"
         f", final validation loss {validation_loss:.4f}"
-        f", test MSE {test_loss:.4f}"
+        f", test loss {test_loss:.4f}"
         f", test MAE {test_mae:.4f}"
         f", test MAE {test_mae_mm:.4f} mm"
+        f", baseline test MAE {baseline_test_mae_mm:.4f} mm"
         f", model saved to {model_path}"
         f", scalers saved to {scaler_path}"
         f", training history saved to {history_path}"

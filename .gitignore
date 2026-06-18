@@ -7,6 +7,8 @@ __pycache__/
 
 # Virtual environments
 .venv/
+.venv_broken/
+.venv_old/
 venv/
 env/
 ENV/
@@ -92,6 +94,9 @@ models/*
 *.ckpt
 *.pb
 *.tflite
+!models/mlp_model.pkl
+!models/scalers.pkl
+!models/training_loss.png
 
 # Runtime output folders
 outputs/

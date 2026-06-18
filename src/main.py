@@ -27,7 +27,8 @@ def main():
     print(cleaned.head())
 
     # Model Training 
-    model_result = train_model(output_path, n_trials=80)
+    # 40 Trials reichen fuer den bewusst kleinen Optuna-Suchraum aus.
+    model_result = train_model(output_path, n_trials=40)
     print(model_result["message"])
 
     # Model Evaluation

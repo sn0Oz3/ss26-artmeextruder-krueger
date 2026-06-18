@@ -8,6 +8,7 @@ def evaluate_model(model_path, scaler_path, history_path, data_path=None):
     model_path = Path(model_path)
     scaler_path = Path(scaler_path)
     history_path = Path(history_path)
+    loss_plot_path = history_path.parent / "training_loss.png"
 
     required_files = [model_path, scaler_path, history_path]
     if data_path is not None:
@@ -42,6 +43,9 @@ def evaluate_model(model_path, scaler_path, history_path, data_path=None):
     print("Evaluation gestartet...")
     print(f"Finaler Training Loss: {train_loss[-1]:.4f}")
     print(f"Finaler Validation Loss: {validation_loss[-1]:.4f}")
+    best_validation_loss = min(validation_loss)
+    best_validation_epoch = validation_loss.index(best_validation_loss) + 1
+    print(f"Bester Validation Loss: {best_validation_loss:.4f} in Epoche {best_validation_epoch}")
     print(f"Finale Training Abweichung: {train_mae_mm[-1]:.4f} mm")
     print(f"Finale Validation Abweichung: {validation_mae_mm[-1]:.4f} mm")
 
@@ -56,6 +60,8 @@ def evaluate_model(model_path, scaler_path, history_path, data_path=None):
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best", framealpha=0.9)
     fig.tight_layout()
+    fig.savefig(loss_plot_path, dpi=300, bbox_inches="tight")
+    print(f"Loss-Plot gespeichert unter: {loss_plot_path}")
 
     fig_mm, ax_mm = plt.subplots(figsize=(10, 5))
     ax_mm.plot(epochs, train_mae_mm, label="Training Abweichung", linewidth=1.8)
@@ -72,7 +78,10 @@ def evaluate_model(model_path, scaler_path, history_path, data_path=None):
     return {
         "final_training_loss": train_loss[-1],
         "final_validation_loss": validation_loss[-1],
+        "best_validation_loss": best_validation_loss,
+        "best_validation_epoch": best_validation_epoch,
         "final_training_mae_mm": train_mae_mm[-1],
         "final_validation_mae_mm": validation_mae_mm[-1],
         "epochs": len(train_loss),
+        "loss_plot_path": loss_plot_path,
     }

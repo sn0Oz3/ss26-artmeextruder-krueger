@@ -7,14 +7,16 @@ import pandas as pd
 
 from extruder_gui import BAD, DIA_TARGET, DIA_TOL, GOOD, INK, MonitorApp
 from prediction import (
-    DEFAULT_FEATURE_COLUMNS,
+    DEFAULT_PREDICTION_HORIZON,
+    DEFAULT_RAW_FEATURE_COLUMNS,
     DEFAULT_SEQUENCE_LENGTH,
     get_test_mae_mm,
     predict_diameter,
 )
 
 # ----------------------------------------------------------------------------------------------------------------------
-# Test der Gui: CSV-Datei wird zeilenweise abgespielt; ab Zeile 41 wird auch aus den vorherigen 40 Zeilen der naechste Durchmesser vorhergesagt.
+# Test der Gui: CSV-Datei wird zeilenweise abgespielt. Sobald genug vorherige
+# Messzeilen vorhanden sind, wird der Durchmesser 10 Zeilen in die Zukunft vorhergesagt.
 # ----------------------------------------------------------------------------------------------------------------------
 # Wie schnell die CSV-Zeilen nacheinander in der GUI angezeigt werden.
 REPLAY_INTERVAL_MS = 500
@@ -91,7 +93,7 @@ def _load_recording_csv(csv_path):
         data_lines.append(line)
 
     csv_df = pd.read_csv(StringIO("\n".join(data_lines)))
-    required_columns = ["Diameter (mm)", *DEFAULT_FEATURE_COLUMNS]
+    required_columns = list(dict.fromkeys(["Diameter (mm)", *DEFAULT_RAW_FEATURE_COLUMNS]))
     optional_numeric_columns = ["Temp Tgt (C)", "Fan %"]
     for column in [*required_columns, *optional_numeric_columns]:
         if column in csv_df.columns:
@@ -103,7 +105,7 @@ def _load_recording_csv(csv_path):
 
 def _validate_csv(csv_df, csv_path):
     # Prueft, ob die CSV alle Spalten enthaelt, die GUI und Prediction brauchen.
-    required_columns = ["Diameter (mm)", *DEFAULT_FEATURE_COLUMNS]
+    required_columns = list(dict.fromkeys(["Diameter (mm)", *DEFAULT_RAW_FEATURE_COLUMNS]))
     missing_columns = [column for column in required_columns if column not in csv_df.columns]
     if missing_columns:
         raise ValueError(
@@ -111,10 +113,12 @@ def _validate_csv(csv_df, csv_path):
             f"{', '.join(missing_columns)}"
         )
 
-    if len(csv_df) <= DEFAULT_SEQUENCE_LENGTH:
+    minimum_rows = DEFAULT_SEQUENCE_LENGTH + DEFAULT_PREDICTION_HORIZON
+    if len(csv_df) < minimum_rows:
         raise ValueError(
-            f"{csv_path} braucht mindestens {DEFAULT_SEQUENCE_LENGTH + 1} Zeilen, "
-            "damit aus 40 vorherigen Zeilen der naechste Durchmesser vorhergesagt werden kann."
+            f"{csv_path} braucht mindestens {minimum_rows} Zeilen, "
+            f"damit aus den vorherigen {DEFAULT_SEQUENCE_LENGTH} Zeilen der "
+            f"Durchmesser in {DEFAULT_PREDICTION_HORIZON} Zeilen vorhergesagt werden kann."
         )
 
 
@@ -168,7 +172,8 @@ def _update_predicted_diameter_with_test_mae(app, prediction):
 
 
 # Skript zum Testen der GUI -> Ich muss nicht immer zum Filamentextruder laufen, um die Vorhersage zu testen.
-# Die CSV wird zeilenweise abgespielt; ab Zeile 61 wird aus den vorherigen 60 Zeilen der naechste Durchmesser vorhergesagt.
+# Die CSV wird zeilenweise abgespielt; ab Zeile 61 wird aus den vorherigen 60 Zeilen
+# der Durchmesser 10 Zeilen spaeter vorhergesagt.
 def main():
     # CSV laden und pruefen, bevor die GUI gestartet wird.
     args = _parse_args()
@@ -202,10 +207,11 @@ def main():
 
         if row_index >= DEFAULT_SEQUENCE_LENGTH:
             # Fuer eine Vorhersage braucht das Modell die vorherigen DEFAULT_SEQUENCE_LENGTH Zeilen.
-            # Die aktuelle Zeile ist der naechste Zeitpunkt, fuer den vorhergesagt wird.
+            # Da DEFAULT_RAW_FEATURE_COLUMNS auch "Diameter (mm)" enthaelt, sieht das Modell
+            # den bisher gemessenen Durchmesser als zusaetzliches Eingabe-Feature.
             previous_rows = csv_df.iloc[
                 row_index - DEFAULT_SEQUENCE_LENGTH:row_index
-            ][DEFAULT_FEATURE_COLUMNS]
+            ][DEFAULT_RAW_FEATURE_COLUMNS]
             try:
                 prediction = predict_diameter(previous_rows)
                 replay_state["prediction_error_reported"] = False

@@ -21,9 +21,17 @@ except ImportError:
     SERIAL_OK = False
 
 try:
-    from prediction import DEFAULT_SEQUENCE_LENGTH, get_test_mae_mm, predict_diameter
+    from prediction import (
+        DEFAULT_PREDICTION_HORIZON,
+        DEFAULT_RAW_FEATURE_COLUMNS,
+        DEFAULT_SEQUENCE_LENGTH,
+        get_test_mae_mm,
+        predict_diameter,
+    )
     PREDICTION_OK = True
 except Exception as e:
+    DEFAULT_RAW_FEATURE_COLUMNS = ['Diameter (mm)', 'Temp Act (C)', 'Extruder RPM', 'Puller RPM', 'Sensor Pos']
+    DEFAULT_PREDICTION_HORIZON = 10
     DEFAULT_SEQUENCE_LENGTH = 40
     get_test_mae_mm = None
     predict_diameter = None
@@ -346,7 +354,7 @@ class MonitorApp:
 
         self._metric_defs = [
             ("Diameter",      "mm",    "fil_width"),
-            ("Diameter predicted", "mm", "fil_width_predicted"),
+            (f"Diameter +{DEFAULT_PREDICTION_HORIZON}", "mm", "fil_width_predicted"),
             ("Temp act / tgt","°C",    "actual_temp"),
             ("Extruder",      "rpm",   "extruder_rpm"),
             ("Puller",        "mm/s",  "puller_speed"),
@@ -733,11 +741,33 @@ class MonitorApp:
         extruder_rpm = data.get("extruder_rpm", 0)
         puller_rpm = data.get("puller_speed", 0)
         sensor_pos = data.get("fil_width", 0)
-        if min(temp_act, extruder_rpm, puller_rpm, sensor_pos) <= 0:
+        current_diameter = self.messuhr_obj.get() if self.messuhr_online and self.messuhr_obj else None
+
+        # Das neue Modell nutzt auch den bisher gemessenen Durchmesser.
+        # Wenn die Messuhr keinen gueltigen Wert liefert, wird die Historie verworfen,
+        # damit keine alten Durchmesser mit neuen Prozesswerten vermischt werden.
+        if current_diameter is None:
             self._prediction_feature_history.clear()
             return None
 
-        feature_row = [temp_act, extruder_rpm, puller_rpm, sensor_pos]
+        feature_values = {
+            "Diameter (mm)": current_diameter,
+            "Temp Act (C)": temp_act,
+            "Extruder RPM": extruder_rpm,
+            "Puller RPM": puller_rpm,
+            "Sensor Pos": sensor_pos,
+        }
+        try:
+            feature_row = [float(feature_values[column]) for column in DEFAULT_RAW_FEATURE_COLUMNS]
+        except (TypeError, ValueError):
+            self._prediction_feature_history.clear()
+            return None
+
+        if min(feature_row) <= 0:
+            self._prediction_feature_history.clear()
+            return None
+
+        # Die Reihenfolge muss exakt zu den Feature-Spalten aus dem Training passen.
         self._prediction_feature_history.append(feature_row)
         if len(self._prediction_feature_history) < DEFAULT_SEQUENCE_LENGTH:
             return None

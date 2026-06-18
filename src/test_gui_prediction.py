@@ -1,6 +1,8 @@
 import argparse
 from io import StringIO
 from pathlib import Path
+import pickle
+import re
 import tkinter as tk
 
 import pandas as pd
@@ -21,6 +23,7 @@ DEFAULT_CSV_PATH = (
     / "data"
     / "recording_2026-06-10_13-53-40.csv"
 )
+MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
 REQUIRED_COLUMNS = [
     "Diameter (mm)",
@@ -126,6 +129,25 @@ def _validate_csv(csv_df, csv_path):
         raise ValueError(f"{csv_path} enthaelt keine gueltigen Messzeilen.")
 
 
+def _load_test_mae_mm():
+    # Der Test-MAE wurde beim Training im skalierten Zielraum gespeichert.
+    # Fuer die Anzeige wird er mit der Standardabweichung des Ziel-Scalers
+    # wieder in Millimeter umgerechnet.
+    hyperparameters_path = MODELS_DIR / "hyperparameters.txt"
+    scalers_path = MODELS_DIR / "scalers.pkl"
+
+    hyperparameters = hyperparameters_path.read_text(encoding="utf-8")
+    match = re.search(r"^Test MAE:\s*([0-9.eE+-]+)\s*$", hyperparameters, re.MULTILINE)
+    if match is None:
+        raise ValueError(f"Kein Test MAE in {hyperparameters_path} gefunden.")
+
+    with scalers_path.open("rb") as scaler_file:
+        diameter_scaler = pickle.load(scaler_file)["diameter_scaler"]
+
+    test_mae_scaled = float(match.group(1))
+    return test_mae_scaled * float(diameter_scaler.scale_[0])
+
+
 def _row_to_gui_data(row, reading_no):
     # Uebersetzt eine CSV-Zeile in das Format der MonitorApp.
     return {
@@ -160,6 +182,7 @@ def main():
     csv_path = args.csv_path.resolve()
     csv_df = _load_recording_csv(csv_path)
     _validate_csv(csv_df, csv_path)
+    test_mae_mm = _load_test_mae_mm()
 
     root = tk.Tk()
     app = MonitorApp(root)
@@ -193,6 +216,11 @@ def main():
                 replay_state["prediction_error_reported"] = True
 
         app._update_metrics(data)
+        prediction = data["fil_width_predicted"]
+        if prediction is not None:
+            app._metric_labels["fil_width_predicted"].config(
+                text=f"{prediction:.3f}mm +/- {test_mae_mm:.3f}mm"
+            )
         _update_actual_diameter(app, row["Diameter (mm)"])
 
         replay_state["row_index"] += 1

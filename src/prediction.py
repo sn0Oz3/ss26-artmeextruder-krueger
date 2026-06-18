@@ -100,9 +100,8 @@ def _prepare_sequence_input(last_rows, feature_columns, sequence_length):
 
 def _add_diameter_trend_features_to_array(raw_values):
     # Array-Variante fuer die Live-GUI: Aus den 5 Rohwerten pro Zeile werden
-    # dieselben 8 Modellfeatures gebaut wie beim Training.
+    # dieselben 7 Modellfeatures gebaut wie beim Training.
     diameter = raw_values[:, 0].astype(float)
-    delta_1 = np.concatenate(([0.0], diameter[1:] - diameter[:-1]))
     delta_5 = np.zeros_like(diameter)
     delta_5[5:] = diameter[5:] - diameter[:-5]
     slope_10 = np.zeros_like(diameter)
@@ -111,7 +110,6 @@ def _add_diameter_trend_features_to_array(raw_values):
     return np.column_stack(
         [
             diameter,
-            delta_1,
             delta_5,
             slope_10,
             raw_values[:, 1],

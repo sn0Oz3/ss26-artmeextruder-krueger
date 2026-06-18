@@ -11,12 +11,12 @@ from feature_engineering import DIAMETER_COLUMN, MODEL_FEATURE_COLUMNS, add_diam
 
 
 MODEL_ARCHITECTURES = {
-    # Sinnvolle Kandidaten statt sehr vieler frei kombinierbarer Layer.
+    # Optuna vergleicht bewusst kleine Netze mit unterschiedlicher Tiefe.
+    # Weniger Neuronen begrenzen die Modellkapazitaet und reduzieren Overfitting.
     # Die Namen landen auch in hyperparameters.txt und machen den Optuna-Lauf lesbarer.
-    "small_32_16": [32, 16],
-    "medium_64_32": [64, 32],
-    "medium_64_32_16": [64, 32, 16],
-    "wide_128_64": [128, 64],
+    "small_16": [16],
+    "small_16_8": [16, 8],
+    "medium_32_16_8": [32, 16, 8],
 }
 FIXED_SEQUENCE_LENGTH = 60
 
@@ -225,8 +225,8 @@ def _suggest_hyperparameters(trial):
     return {
         "architecture": architecture,
         "hidden_units": MODEL_ARCHITECTURES[architecture],
-        "dropout_rate": trial.suggest_categorical("dropout_rate", [0.0, 0.05, 0.1]),
-        "l2_rate": trial.suggest_categorical("l2_rate", [0.0, 1e-6, 1e-5, 1e-4]),
+        "dropout_rate": trial.suggest_categorical("dropout_rate", [0.15, 0.25, 0.35, 0.5]),
+        "l2_rate": trial.suggest_categorical("l2_rate", [1e-4, 5e-4, 1e-3]),
         "learning_rate": trial.suggest_categorical("learning_rate", [1e-4, 3e-4, 1e-3]),
         "batch_size": trial.suggest_categorical("batch_size", [16, 32, 64]),
         # Die Sequenzlaenge bleibt fest, damit Training, gespeichertes Modell
@@ -377,11 +377,11 @@ def train_model(data, n_trials=40):
     validation_size = 0.2
     random_state = 42
     shuffle = True
-    epochs = 250
+    epochs = 100
     early_stopping_settings = {
         "monitor": "val_loss",
         "mode": "min",
-        "patience": 20,
+        "patience": 7,
         "min_delta": 0.00005,
         "restore_best_weights": True,
     }
@@ -389,7 +389,7 @@ def train_model(data, n_trials=40):
         "monitor": "val_loss",
         "mode": "min",
         "factor": 0.5,
-        "patience": 6,
+        "patience": 3,
         "min_delta": 0.00005,
         "min_lr": 1e-6,
     }
@@ -459,7 +459,8 @@ def train_model(data, n_trials=40):
 
     # Jetzt wird das finale Modell mit den besten Hyperparametern gebaut.
     _clear_keras_session()
-    _set_training_seed(random_state)
+    final_training_seed = random_state + study.best_trial.number
+    _set_training_seed(final_training_seed)
     mlp_model = build_mlp_model(
         input_dim=X_train.shape[1],
         hidden_units=hidden_units,
@@ -559,6 +560,7 @@ def train_model(data, n_trials=40):
         "Optuna\n"
         "------\n"
         f"Trials: {n_trials}\n"
+        f"Best Trial: {study.best_trial.number}\n"
         f"Best Validation Metric ({early_stopping_settings['monitor']}): {study.best_value:.4f}\n"
         f"Study gespeichert unter: {optuna_study_path}\n\n"
         "Beste Optuna-Parameter\n"
@@ -590,6 +592,7 @@ def train_model(data, n_trials=40):
         f"Test Size: {test_size}\n"
         f"Validation Size vom Trainingsanteil: {validation_size}\n"
         f"Random State: {random_state}\n"
+        f"Final Training Seed: {final_training_seed}\n"
         f"Shuffle: {shuffle}\n\n"
         "Early Stopping\n"
         "--------------\n"
@@ -639,6 +642,8 @@ def train_model(data, n_trials=40):
         f", train/validation/test shape "
         f"{X_train.shape}/{y_train.shape}, {X_val.shape}/{y_val.shape}, {X_test.shape}/{y_test.shape}"
         f", optuna trials {n_trials}"
+        f", best trial {study.best_trial.number}"
+        f", final training seed {final_training_seed}"
         f", best optuna {early_stopping_settings['monitor']} {study.best_value:.4f}"
         f", trained epochs {len(history.history['loss'])}"
         f", final validation loss {validation_loss:.4f}"

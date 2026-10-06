@@ -6,6 +6,7 @@ __pycache__/
 *$py.class
 
 # Virtual environments
+.python-packages/
 .venv/
 .venv_broken/
 .venv_old/
